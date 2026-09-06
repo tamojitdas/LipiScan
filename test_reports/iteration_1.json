@@ -1,0 +1,35 @@
+{
+  "summary": "LipiScan backend + frontend fully verified. All 16 pytest tests pass (quality-check clear/blur/dim/no_text, extract creates history, history list+soft-delete+404/400 edge cases, append-docx end preserves Bengali 'নতুন বাংলা', append after_heading inserts in correct position with Section Two still after, invalid heading→404, invalid docx→400, missing download id→404). Frontend Expo web preview: Home shows LipiScan title/subtitle, history list renders, delete button removes card (1→0), New Scan FAB navigates to /camera showing 'Camera access needed' + gallery fallback. /quality and /review correctly redirect to /camera when session.photoUri is null. /append screen renders header, '(no text)' preview, Browse button; Save button is functionally disabled without a file (opacity 0.5 style applied, disabled prop true) though Playwright's is_disabled() returns false because Pressable on RN web renders as a div (this is expected RN behavior, not a bug). Two React warnings surfaced: quality.tsx and review.tsx call router.replace during render (should be inside useEffect).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "app/quality.tsx", "issue": "router.replace('/camera') called during render (lines 37-40) triggers React warning 'Cannot update a component while rendering a different component'. Wrap in useEffect. Reference: /app/frontend/app/quality.tsx:37"},
+      {"component": "app/review.tsx", "issue": "router.replace('/camera') called during render (lines 38-41) triggers React warning 'Cannot update a component while rendering a different component'. Wrap in useEffect. Reference: /app/frontend/app/review.tsx:38"}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_lipiscan_api.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional: Move router.replace('/camera') calls in quality.tsx (line 37) and review.tsx (line 38) into a useEffect to eliminate the 'setState during render' React warning.",
+    "Optional: Replace deprecated @app.on_event('shutdown') in backend/server.py:266 with a FastAPI lifespan context manager."
+  ],
+  "critical_code_review_comments": [
+    "quality.tsx:37-40 and review.tsx:38-41 do side-effect navigation during render — anti-pattern, produces console warnings.",
+    "backend/server.py:266 uses deprecated @app.on_event('shutdown'); prefer lifespan.",
+    "session.ts uses a module-level mutable object for cross-screen state — works but not robust to hot reload / deep-link resume; consider Zustand or route params for photoUri/text.",
+    "append_docx_sync raises HTTPException from within asyncio.to_thread — works but couples business layer to HTTP layer; consider raising a custom exception and mapping at the route boundary."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_lipiscan_api.py (new)"
+  ],
+  "success_rate": {"backend": "100% (16/16)", "frontend": "100% of automatable flows (camera capture not testable headlessly, per instructions)"},
+  "seed_data_creation": "Tests create ephemeral history records via /api/extract (prefixed TEST_) and soft-delete one during the run; remaining test-created rows remain soft-deleted-free by design (harmless).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend URL comes from EXPO_PUBLIC_BACKEND_URL (frontend .env). Test images are generated on-the-fly with PIL/cv2 (DejaVuSans font available at /usr/share/fonts/truetype/dejavu/). Bengali roundtrip via python-docx confirmed. Camera capture cannot be automated in headless browser — verify with permission screen presence only. /quality and /review both use router.replace during render — expected redirect behavior works but triggers React warning."
+}
