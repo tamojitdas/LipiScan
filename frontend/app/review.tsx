@@ -1,5 +1,5 @@
 import Icon from "@react-native-vector-icons/material-design-icons";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
@@ -9,7 +9,7 @@ import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { buildImageForm, postForm } from "@/src/api";
-import { session } from "@/src/session";
+import { API_BASE, session } from "@/src/session";
 import { makeStyles, useTheme } from "@/src/theme";
 
 export default function Review() {
@@ -19,6 +19,43 @@ export default function Review() {
   const router = useRouter();
   const uri = session.photoUri;
   const [text, setText] = useState("");
+  const [prevText, setPrevText] = useState<string | null>(null);
+  const [cleanupError, setCleanupError] = useState<string | null>(null);
+
+  const cleanupMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`${API_BASE}/cleanup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) {
+        let detail = "AI cleanup failed";
+        try {
+          detail = (await res.json()).detail ?? detail;
+        } catch {}
+        throw new Error(detail);
+      }
+      return res.json() as Promise<{ text: string }>;
+    },
+    onSuccess: (d) => {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setPrevText(text);
+      setText(d.text);
+      setCleanupError(null);
+    },
+    onError: (e: Error) => {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      setCleanupError(e.message);
+    },
+  });
+
+  const undoCleanup = () => {
+    if (prevText !== null) {
+      setText(prevText);
+      setPrevText(null);
+    }
+  };
 
   const { data, isLoading, isError, error, refetch } = useQuery<{ id: string; text: string }>({
     queryKey: ["extract", uri],
@@ -67,7 +104,38 @@ export default function Review() {
 
       <View style={[styles.panel, { paddingBottom: insets.bottom + 16 }]}>
         <View style={styles.handle} />
-        <Text style={styles.panelTitle}>Extracted Text</Text>
+        <View style={styles.titleRow}>
+          <Text style={styles.panelTitle}>Extracted Text</Text>
+          {!isLoading && !isError ? (
+            prevText !== null ? (
+              <Pressable testID="review-undo-cleanup-button" style={styles.aiBtn} onPress={undoCleanup}>
+                <Icon name="undo-variant" size={16} color={colors.onBrandTertiary} />
+                <Text style={styles.aiBtnText}>Undo</Text>
+              </Pressable>
+            ) : (
+              <Pressable
+                testID="review-ai-cleanup-button"
+                style={[styles.aiBtn, (!text.trim() || cleanupMutation.isPending) && styles.disabledBtn]}
+                disabled={!text.trim() || cleanupMutation.isPending}
+                onPress={() => cleanupMutation.mutate()}
+              >
+                {cleanupMutation.isPending ? (
+                  <ActivityIndicator size="small" color={colors.onBrandTertiary} />
+                ) : (
+                  <Icon name="auto-fix" size={16} color={colors.onBrandTertiary} />
+                )}
+                <Text style={styles.aiBtnText}>
+                  {cleanupMutation.isPending ? "Cleaning…" : "AI Cleanup"}
+                </Text>
+              </Pressable>
+            )
+          ) : null}
+        </View>
+        {cleanupError ? (
+          <Text style={styles.cleanupErrorText} testID="review-cleanup-error">
+            {cleanupError}
+          </Text>
+        ) : null}
         {isLoading ? (
           <View style={styles.center} testID="review-loading">
             <ActivityIndicator color={colors.brandPrimary} size="large" />
@@ -93,7 +161,10 @@ export default function Review() {
               style={styles.input}
               multiline
               value={text}
-              onChangeText={setText}
+              onChangeText={(t) => {
+                setText(t);
+                if (cleanupError) setCleanupError(null);
+              }}
               placeholder="Edit the extracted text here…"
               placeholderTextColor={colors.muted}
               textAlignVertical="top"
@@ -143,6 +214,18 @@ const useStyles = makeStyles((colors) => ({
     backgroundColor: colors.borderStrong,
   },
   panelTitle: { fontFamily: "Outfit", fontSize: 20, color: colors.onSurface, fontWeight: "600" },
+  titleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  aiBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: colors.brandTertiary,
+    paddingHorizontal: 16,
+    height: 38,
+    borderRadius: 999,
+  },
+  aiBtnText: { fontFamily: "Figtree", fontSize: 13, color: colors.onBrandTertiary, fontWeight: "700" },
+  cleanupErrorText: { fontFamily: "Figtree", fontSize: 12, color: colors.error },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 16 },
   loadingText: { fontFamily: "Figtree", fontSize: 14, color: colors.muted, textAlign: "center" },
   errorText: { fontFamily: "Figtree", fontSize: 14, color: colors.error, textAlign: "center" },

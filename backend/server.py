@@ -3,6 +3,8 @@ import io
 import logging
 import os
 import re
+import shutil
+import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +15,7 @@ import numpy as np
 import pytesseract
 from docx import Document as DocxDocument
 from dotenv import load_dotenv
+from emergentintegrations.llm.chat import LlmChat, UserMessage
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -33,6 +36,29 @@ DOWNLOADS_DIR = Path("/tmp/lipiscan_downloads")
 DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def ensure_tesseract():
+    """Self-heal: fresh containers may miss the tesseract system package."""
+    if shutil.which("tesseract"):
+        return
+    logging.warning("tesseract not found; installing tesseract-ocr (ben+eng)...")
+    try:
+        subprocess.run(
+            ["apt-get", "install", "-y", "-qq", "tesseract-ocr", "tesseract-ocr-ben", "tesseract-ocr-eng"],
+            check=True,
+            capture_output=True,
+            timeout=300,
+        )
+        logging.info("tesseract installed successfully")
+    except Exception:
+        logging.exception("automatic tesseract install failed; OCR endpoints will error")
+
+
+@app.on_event("startup")
+async def startup_checks():
+    await asyncio.to_thread(ensure_tesseract)
+
 
 # ---------- Mongo helpers ----------
 PyObjectId = Annotated[str, BeforeValidator(str)]
@@ -185,6 +211,40 @@ async def delete_history(item_id: str):
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}
+
+
+CLEANUP_SYSTEM = (
+    "You are an OCR post-processing assistant specializing in Bengali and English handwriting. "
+    "The user sends raw OCR output that may contain recognition errors, broken words, wrong "
+    "characters, bad spacing and stray symbols. Rewrite it as clean, correctly spelled, properly "
+    "punctuated text with sensible sentence and paragraph structure. Keep the original language(s) "
+    "of each part (Bengali stays Bengali, English stays English). Preserve the meaning; never add "
+    "new information or commentary. Reply with ONLY the corrected text, nothing else."
+)
+
+
+class CleanupRequest(BaseModel):
+    text: str
+
+
+@api_router.post("/cleanup")
+async def cleanup_text(body: CleanupRequest):
+    if not body.text.strip():
+        raise HTTPException(status_code=400, detail="No text to clean up")
+    chat = LlmChat(
+        api_key=os.environ["EMERGENT_LLM_KEY"],
+        session_id=f"cleanup-{uuid.uuid4().hex}",
+        system_message=CLEANUP_SYSTEM,
+    ).with_model("openai", "gpt-5.4")
+    try:
+        result = await chat.send_message(UserMessage(text=body.text))
+    except Exception:
+        logging.exception("cleanup failed")
+        raise HTTPException(status_code=502, detail="AI cleanup failed. Please try again.")
+    cleaned = str(result).strip()
+    if not cleaned:
+        raise HTTPException(status_code=502, detail="AI returned an empty response")
+    return {"text": cleaned}
 
 
 def append_docx_sync(docx_bytes: bytes, text: str, position: str, heading: str) -> bytes:

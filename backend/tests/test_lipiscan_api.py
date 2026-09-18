@@ -272,3 +272,40 @@ class TestAppendDocx:
     def test_download_missing_id_returns_404(self, session):
         r = session.get(f"{API}/download/does-not-exist")
         assert r.status_code == 404
+
+
+# ---------- AI cleanup (new this iteration) ----------
+class TestCleanup:
+    def test_cleanup_mixed_bengali_english(self, session):
+        raw = "Hell0 w0rld thls is a testt. আমি বাংলাय় লিখছ i"
+        r = session.post(f"{API}/cleanup", json={"text": raw}, timeout=60)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert "text" in data
+        cleaned = data["text"]
+        assert isinstance(cleaned, str)
+        assert cleaned.strip() != ""
+        # sanity: should contain both Latin letters and Bengali script
+        has_latin = any("a" <= c.lower() <= "z" for c in cleaned)
+        has_bengali = any("\u0980" <= c <= "\u09FF" for c in cleaned)
+        assert has_latin, f"expected English chars in cleaned output: {cleaned!r}"
+        assert has_bengali, f"expected Bengali chars in cleaned output: {cleaned!r}"
+        # should NOT contain obvious commentary preamble
+        low = cleaned.lower()
+        for banned in ["here is", "corrected text:", "sure,", "note:"]:
+            assert banned not in low, f"model added commentary '{banned}': {cleaned!r}"
+
+    def test_cleanup_empty_text_returns_400(self, session):
+        r = session.post(f"{API}/cleanup", json={"text": ""})
+        assert r.status_code == 400
+        assert r.json().get("detail") == "No text to clean up"
+
+    def test_cleanup_whitespace_only_returns_400(self, session):
+        r = session.post(f"{API}/cleanup", json={"text": "   \n\t  "})
+        assert r.status_code == 400
+        assert r.json().get("detail") == "No text to clean up"
+
+    def test_cleanup_missing_field_returns_422(self, session):
+        r = session.post(f"{API}/cleanup", json={})
+        # Pydantic validation -> 422
+        assert r.status_code == 422

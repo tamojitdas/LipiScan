@@ -21,7 +21,14 @@ User requested a native Android (Kotlin/Jetpack Compose) app for extracting hand
 - POST /api/append-docx (docx, text, position=end|after_heading, heading) → {download_id, filename}
 - GET /api/download/{download_id}
 
-## Implemented (June 2026 — MVP)
+## Implemented (June 2026)
+### Iteration 2 — AI Text Cleanup
+- POST /api/cleanup: Emergent LLM key (openai gpt-5.4 via emergentintegrations) fixes OCR mistakes and formats Bengali/English text; 400 on empty text
+- Review screen: "AI Cleanup" button (spinner while pending, disabled when empty), one-step Undo, inline error that clears on edit
+- Backend self-heals missing tesseract system package on startup (fresh-container fix found by testing agent)
+- Tested: 20/20 backend pytest (4 new cleanup tests + regressions), home smoke pass
+
+### Iteration 1 — MVP
 - Camera capture with corner-bracket guide frame overlay, permission flow (pre-permission explainer, Open Settings fallback), gallery picker fallback
 - Quality check screen (bottom sheet: 3 checks, Retake / Proceed Anyway / Extract Text)
 - OCR review screen (split image + editable text, Bengali+English)
@@ -31,7 +38,6 @@ User requested a native Android (Kotlin/Jetpack Compose) app for extracting hand
 
 ## Backlog
 - P1: Store captured image thumbnails (Emergent Object Storage) in history cards
-- P1: LLM cleanup pass on OCR text (Emergent LLM key) for handwriting accuracy
 - P2: Batch multi-page capture into one document
 - P2: Dark theme
 - Note: real camera capture requires device testing (Expo Go); web preview shows permission gate only.
