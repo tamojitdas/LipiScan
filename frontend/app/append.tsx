@@ -10,7 +10,7 @@ import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import Animated, { FadeIn, FadeInDown } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { postForm } from "@/src/api";
+import { nativeFilePart, postForm } from "@/src/api";
 import { API_BASE, session } from "@/src/session";
 import { makeStyles, useTheme } from "@/src/theme";
 
@@ -55,7 +55,7 @@ export default function Append() {
         const blob = await (await fetch(picked!.uri)).blob();
         form.append("file", blob, picked!.name);
       } else {
-        form.append("file", { uri: picked!.uri, name: picked!.name, type: DOCX_MIME } as any);
+        form.append("file", nativeFilePart(picked!.uri), picked!.name);
       }
       form.append("text", session.text);
       form.append("position", position);

@@ -1,6 +1,14 @@
+import { File as FsFile } from "expo-file-system";
 import { Platform } from "react-native";
 
 import { API_BASE } from "@/src/session";
+
+// Expo SDK 54+ ships a WinterCG-compliant fetch/FormData, which rejects the
+// legacy React Native `{ uri, name, type }` part ("Unsupported FormDataPart
+// implementation"). expo-file-system's `File` implements Blob, so it works.
+export function nativeFilePart(uri: string) {
+  return new FsFile(uri) as unknown as Blob;
+}
 
 export async function buildImageForm(uri: string): Promise<FormData> {
   const form = new FormData();
@@ -8,7 +16,7 @@ export async function buildImageForm(uri: string): Promise<FormData> {
     const blob = await (await fetch(uri)).blob();
     form.append("file", blob, "photo.jpg");
   } else {
-    form.append("file", { uri, name: "photo.jpg", type: "image/jpeg" } as any);
+    form.append("file", nativeFilePart(uri), "photo.jpg");
   }
   return form;
 }
