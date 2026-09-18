@@ -12,6 +12,8 @@ import { buildImageForm, postForm } from "@/src/api";
 import { API_BASE, session } from "@/src/session";
 import { makeStyles, useTheme } from "@/src/theme";
 
+type ExtractResult = { id: string; text: string; engine?: "ai" | "tesseract" };
+
 export default function Review() {
   const insets = useSafeAreaInsets();
   const styles = useStyles();
@@ -57,14 +59,14 @@ export default function Review() {
     }
   };
 
-  const { data, isLoading, isError, error, refetch } = useQuery<{ id: string; text: string }>({
+  const { data, isLoading, isError, error, refetch } = useQuery<ExtractResult>({
     queryKey: ["extract", uri],
     enabled: !!uri,
     retry: false,
     staleTime: Infinity,
     queryFn: async () => {
       const form = await buildImageForm(uri!);
-      return postForm<{ id: string; text: string }>("/extract", form);
+      return postForm<ExtractResult>("/extract", form);
     },
   });
 
@@ -136,10 +138,16 @@ export default function Review() {
             {cleanupError}
           </Text>
         ) : null}
+        {data?.engine === "tesseract" ? (
+          <Text style={styles.fallbackHint} testID="review-fallback-hint">
+            AI reader was unavailable, so offline OCR was used — results may be rough. Tap AI Cleanup
+            or retry.
+          </Text>
+        ) : null}
         {isLoading ? (
           <View style={styles.center} testID="review-loading">
             <ActivityIndicator color={colors.brandPrimary} size="large" />
-            <Text style={styles.loadingText}>Running OCR extraction (Bengali + English)…</Text>
+            <Text style={styles.loadingText}>Reading your handwriting with AI (Bengali + English)…</Text>
           </View>
         ) : isError ? (
           <View style={styles.center} testID="review-error">
@@ -230,6 +238,7 @@ const useStyles = makeStyles((colors) => ({
   loadingText: { fontFamily: "Figtree", fontSize: 14, color: colors.muted, textAlign: "center" },
   errorText: { fontFamily: "Figtree", fontSize: 14, color: colors.error, textAlign: "center" },
   emptyHint: { fontFamily: "Figtree", fontSize: 13, color: colors.warning },
+  fallbackHint: { fontFamily: "Figtree", fontSize: 12, color: colors.warning, lineHeight: 17 },
   input: {
     flex: 1,
     backgroundColor: colors.surfaceSecondary,

@@ -16,12 +16,20 @@ User requested a native Android (Kotlin/Jetpack Compose) app for extracting hand
 
 ## API
 - POST /api/quality-check (image) → {ok, blur_score, brightness, has_text, issues[]}
-- POST /api/extract (image) → {id, text} + history record
+- POST /api/extract (image) → {id, text, engine} + history record (Gemini 3 Flash vision primary, Tesseract fallback)
 - GET /api/history, DELETE /api/history/{id} (soft delete)
 - POST /api/append-docx (docx, text, position=end|after_heading, heading) → {download_id, filename}
 - GET /api/download/{download_id}
 
 ## Implemented (June 2026)
+### Iteration 3 — AI Vision OCR for handwriting
+- Problem: Tesseract garbled handwritten Bengali/English (user-reported wrong results)
+- POST /api/extract now uses Gemini 3 Flash vision (`gemini-3-flash-preview` via emergentintegrations + Emergent LLM key) as primary engine — transcribes AND cleans/formats in one pass; Tesseract runs only as offline fallback when the AI call fails. Response adds `engine: "ai" | "tesseract"`
+- Image downscaled to 1600px + JPEG re-encode before sending to the model
+- Quality check `has_text` is now handwriting-aware: adaptive-threshold ink-density heuristic OR'd with the quick Tesseract probe (handwriting no longer flagged "no text")
+- Review screen: AI loading copy, warning hint when the Tesseract fallback was used; manual "AI Cleanup" button retained
+- Fixed "Unsupported FormDataPart implementation" upload crash — Expo SDK 57 WinterCG fetch needs `expo-file-system` `File` parts instead of `{uri,name,type}` (src/api.ts, app/append.tsx)
+
 ### Iteration 2 — AI Text Cleanup
 - POST /api/cleanup: Emergent LLM key (openai gpt-5.4 via emergentintegrations) fixes OCR mistakes and formats Bengali/English text; 400 on empty text
 - Review screen: "AI Cleanup" button (spinner while pending, disabled when empty), one-step Undo, inline error that clears on edit

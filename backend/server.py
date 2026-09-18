@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import io
 import logging
 import os
@@ -15,7 +16,7 @@ import numpy as np
 import pytesseract
 from docx import Document as DocxDocument
 from dotenv import load_dotenv
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+from emergentintegrations.llm.chat import ImageContent, LlmChat, UserMessage
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -121,6 +122,22 @@ def _clean_text(raw: str) -> str:
     return re.sub(r"[ \t]{2,}", " ", text)
 
 
+def _has_ink_marks(gray: np.ndarray) -> bool:
+    """Handwriting-friendly text presence check: look for dark ink strokes.
+
+    Tesseract often reads nothing on handwriting, so we also measure the share of
+    dark pixels after adaptive thresholding — writing covers a small but non-zero
+    part of the page, while blank/uniform frames cover almost none.
+    """
+    small = _resize_max(gray, 900)
+    binary = cv2.adaptiveThreshold(
+        small, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 25, 12
+    )
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+    ink_ratio = float(binary.mean()) / 255.0
+    return 0.004 <= ink_ratio <= 0.45
+
+
 def analyze_quality_sync(img_bytes: bytes) -> dict:
     gray = _decode_gray(img_bytes)
     gray = _resize_max(gray, 1200)
@@ -129,7 +146,7 @@ def analyze_quality_sync(img_bytes: bytes) -> dict:
     small = _resize_max(gray, 900)
     quick = pytesseract.image_to_string(small, lang="ben+eng", config="--psm 6")
     readable = len([c for c in quick if not c.isspace()])
-    has_text = readable >= 3
+    has_text = readable >= 3 or _has_ink_marks(gray)
 
     issues = []
     if blur_score < 45:
@@ -155,6 +172,51 @@ def run_ocr_sync(img_bytes: bytes) -> str:
     return _clean_text(raw)
 
 
+def prepare_for_vision_sync(img_bytes: bytes) -> str:
+    """Downscale + re-encode as JPEG, returned base64 for the vision model."""
+    arr = np.frombuffer(img_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("Could not decode image")
+    img = _resize_max(img, 1600)
+    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    if not ok:
+        raise ValueError("Could not encode image")
+    return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
+VISION_OCR_SYSTEM = (
+    "You are an expert handwriting transcription engine for Bengali (Bangla) and English. "
+    "You are given a photo of handwritten (or printed) notes. Transcribe every word you can read, "
+    "in reading order, keeping the original language of each part (Bengali stays Bengali, English "
+    "stays English). Fix obvious handwriting/spelling slips, add sensible punctuation and keep the "
+    "line/paragraph structure of the page. Never translate, never summarise, never add commentary, "
+    "headings or explanations that are not on the page. If a word is truly illegible write it as [?]. "
+    "If the image contains no readable text at all, reply with exactly: NO_TEXT_FOUND. "
+    "Reply with ONLY the transcribed text."
+)
+
+
+async def run_vision_ocr(img_bytes: bytes) -> str:
+    """Primary OCR: Gemini 3 Flash vision. Raises on failure so Tesseract can take over."""
+    image_b64 = await asyncio.to_thread(prepare_for_vision_sync, img_bytes)
+    chat = LlmChat(
+        api_key=os.environ.get("EMERGENT_LLM_KEY", ""),
+        session_id=f"ocr-{uuid.uuid4().hex}",
+        system_message=VISION_OCR_SYSTEM,
+    ).with_model("gemini", "gemini-3-flash-preview")
+    result = await chat.send_message(
+        UserMessage(
+            text="Transcribe the handwritten text in this image.",
+            file_contents=[ImageContent(image_base64=image_b64)],
+        )
+    )
+    text = str(result).strip()
+    if text.upper().startswith("NO_TEXT_FOUND"):
+        return ""
+    return _clean_text(text)
+
+
 # ---------- Routes ----------
 @api_router.get("/")
 async def root():
@@ -178,10 +240,20 @@ async def extract_text(file: UploadFile = File(...)):
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Empty file")
+
+    engine = "ai"
+    text = ""
     try:
-        text = await asyncio.to_thread(run_ocr_sync, data)
+        text = await run_vision_ocr(data)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid image")
+    except Exception:
+        logging.exception("vision OCR failed; falling back to tesseract")
+        engine = "tesseract"
+        try:
+            text = await asyncio.to_thread(run_ocr_sync, data)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid image")
 
     item = HistoryItem(
         text=text,
@@ -190,7 +262,7 @@ async def extract_text(file: UploadFile = File(...)):
         created_at=datetime.now(timezone.utc),
     )
     res = await db.history.insert_one(item.to_mongo())
-    return {"id": str(res.inserted_id), "text": text}
+    return {"id": str(res.inserted_id), "text": text, "engine": engine}
 
 
 @api_router.get("/history")
