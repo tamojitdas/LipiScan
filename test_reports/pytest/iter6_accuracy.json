@@ -1,0 +1,59 @@
+{
+  "cases": [
+    {
+      "case": "bengali_multiline",
+      "engine": "gemini-pro",
+      "latency_s": 10.47,
+      "accuracy": 1.0,
+      "truth": "আমার সোনার বাংলা\nআমি তোমায় ভালোবাসি\nচিরদিন তোমার আকাশ\nতোমার বাতাস\nআমার প্রাণে বাজায়\nমধুর বাঁশি",
+      "predicted": "আমার সোনার বাংলা\nআমি তোমায় ভালোবাসি\nচিরদিন তোমার আকাশ\nতোমার বাতাস\nআমার প্রাণে বাজায়\nমধুর বাঁশি"
+    },
+    {
+      "case": "mixed_bengali_english",
+      "engine": "gemini-pro",
+      "latency_s": 9.23,
+      "accuracy": 0.952,
+      "truth": "আজ Monday, class শুরু\nMath আর Science পড়তে হবে\nআমার roll number 42\nTeacher বললেন homework করো\nExam আসছে next week",
+      "predicted": "আজ Monday, class শুরু\nMath আর Science পড়তে হবে\nআমার roll number 42\nTeacher বললেন homework করো\nExam আসছে next week"
+    },
+    {
+      "case": "degraded_page",
+      "engine": "gemini-pro",
+      "latency_s": 13.08,
+      "accuracy": 1.0,
+      "truth": "আজ Monday, class শুরু\nMath আর Science পড়তে হবে\nআমার roll number 42\nTeacher বললেন homework করো\nExam আসছে next week",
+      "predicted": "আজ Monday, class শুরু\nMath আর Science পড়তে হবে\nআমার roll number 42\nTeacher বললেন homework করো\nExam আসছে next week"
+    },
+    {
+      "case": "short_two_lines",
+      "engine": "gemini-pro",
+      "latency_s": 10.33,
+      "accuracy": 1.0,
+      "truth": "Hello world\nLipiScan test",
+      "predicted": "Hello world\nLipiScan test"
+    },
+    {
+      "case": "long_page_12_lines",
+      "engine": "gemini-pro",
+      "latency_s": 7.53,
+      "accuracy": 1.0,
+      "found_tokens": [
+        "one",
+        "two",
+        "third",
+        "fourth",
+        "fifth",
+        "six",
+        "seventh",
+        "eighth",
+        "ninth",
+        "tenth",
+        "eleventh",
+        "twelfth"
+      ],
+      "dupes": [],
+      "truth": "Line one of the long test\nLine two should be here\nThis is the third line\nFourth line of the page\nFifth line continues here\nLine six of handwritten text\nSeventh row of the note\nEighth line keeps going\nNinth line almost there\nTenth line of the page\nEleventh line finishes it\nTwelfth and final line",
+      "predicted": "Line one of the long test\nLine two should be here\nThis is the third line\nFourth line of the page\nFifth line continues here\nLine six of handwritten text\nSeventh row of the note\nEighth line keeps going\nNinth line almost there\nTenth line of the page\nEleventh line finishes it\nTwelfth and final line"
+    }
+  ]
+}

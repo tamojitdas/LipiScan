@@ -13,7 +13,11 @@ import { API_BASE, session } from "@/src/session";
 import { ENGINE_LABELS, getOcrEngine } from "@/src/settings";
 import { makeStyles, useTheme } from "@/src/theme";
 
-type ExtractResult = { id: string; text: string; engine?: "gemma" | "gemini" | "tesseract" };
+type ExtractResult = {
+  id: string;
+  text: string;
+  engine?: "gemini-pro" | "gemini-flash" | "gemma" | "tesseract";
+};
 
 export default function Review() {
   const insets = useSafeAreaInsets();
@@ -153,7 +157,10 @@ export default function Review() {
         {isLoading ? (
           <View style={styles.center} testID="review-loading">
             <ActivityIndicator color={colors.brandPrimary} size="large" />
-            <Text style={styles.loadingText}>Reading your handwriting with AI (Bengali + English)…</Text>
+            <Text style={styles.loadingText}>
+              Reading your handwriting line by line, then proofreading it — this can take up to a
+              minute.
+            </Text>
           </View>
         ) : isError ? (
           <View style={styles.center} testID="review-error">

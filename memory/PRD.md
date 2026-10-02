@@ -22,6 +22,16 @@ User requested a native Android (Kotlin/Jetpack Compose) app for extracting hand
 - GET /api/download/{download_id}
 
 ## Implemented (June 2026)
+### Iteration 6 — Accuracy overhaul (default = Gemini 3.1 Pro)
+- Bug: user reported transcriptions still varying a lot from the page. Fine-tuning rejected (needs labelled corpus + GPUs); instead rebuilt the pipeline
+- Engine registry `AI_ENGINES`: `gemini-pro` → gemini-3.1-pro-preview (DEFAULT), `gemini-flash` → gemini-3-flash-preview, `gemma` → HF google/gemma-4-31B-it; fallback = preferred → others → Tesseract
+- Preprocessing: deskew (minAreaRect), denoise + CLAHE contrast, 2400px, JPEG q95 (was a flat 1600px q90 downscale)
+- Line-band transcription: projection-profile line detection → groups of 3 lines → band crops upscaled to ≥1600px → parallel model calls → joined draft (full-page single pass when <4 lines; max 12 bands)
+- Two-pass proofread: the model re-checks the draft against the full page; draft is kept if the refine result is empty or <50% of its length
+- Bengali-first language hint in all prompts; markdown-fence stripping in `_finalize_ocr_text`
+- Settings screen now lists 3 engines (Pro default); review copy says it reads line by line then proofreads
+- Tested: 37/37 pytest incl. new accuracy harness (`tests/test_ocr_accuracy_iter6.py`, results in test_reports/pytest/iter6_accuracy.json) — Bengali 100%, mixed 95%+, skewed+blurred+noisy 100%, 12-line page 100%, 7-13s per page; frontend flows green
+
 ### Iteration 5 — Scrollable quality sheet (mobile fix)
 - Bug (Expo Go, real phone): the post-capture quality bottom sheet was a fixed absolute View, so on phone screens its content overflowed and could not be scrolled — buttons were unreachable
 - Fix: sheet now `maxHeight: 78%` with the content inside a ScrollView (`quality-sheet-scroll`), bottom safe-area inset applied to the scroll content

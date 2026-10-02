@@ -174,55 +174,156 @@ def run_ocr_sync(img_bytes: bytes) -> str:
     return _clean_text(raw)
 
 
-def prepare_for_vision_sync(img_bytes: bytes) -> str:
-    """Downscale + re-encode as JPEG, returned base64 for the vision model."""
-    arr = np.frombuffer(img_bytes, np.uint8)
-    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    if img is None:
-        raise ValueError("Could not decode image")
-    img = _resize_max(img, 1600)
-    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+def _deskew(gray: np.ndarray) -> np.ndarray:
+    """Straighten a slightly rotated page — handwriting OCR is sensitive to skew."""
+    bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+    coords = cv2.findNonZero(bw)
+    if coords is None:
+        return gray
+    angle = cv2.minAreaRect(coords)[-1]
+    if angle > 45:
+        angle -= 90
+    if abs(angle) < 0.4 or abs(angle) > 15:
+        return gray
+    h, w = gray.shape[:2]
+    m = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
+    return cv2.warpAffine(
+        gray, m, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE
+    )
+
+
+def _enhance(gray: np.ndarray) -> np.ndarray:
+    """Boost local contrast so faint pen strokes survive JPEG encoding."""
+    gray = cv2.fastNlMeansDenoising(gray, None, 7, 7, 21)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    return clahe.apply(gray)
+
+
+def _to_b64_jpeg(img: np.ndarray, quality: int = 95) -> str:
+    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
     if not ok:
         raise ValueError("Could not encode image")
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
+def _line_bands(gray: np.ndarray, max_lines_per_band: int = 3) -> List[tuple]:
+    """Find handwriting lines via a horizontal projection profile and group them
+    into small bands. Transcribing a few lines at a time at high resolution is far
+    more accurate than one shrunken full-page pass."""
+    h, w = gray.shape[:2]
+    bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+    kernel_w = max(15, w // 60)
+    bw = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, np.ones((3, kernel_w), np.uint8))
+    proj = (bw > 0).sum(axis=1)
+    row_threshold = max(4.0, 0.004 * w)
+    min_line_h = max(6, h // 180)
+
+    lines: List[tuple] = []
+    start = None
+    for i, value in enumerate(proj):
+        if value > row_threshold and start is None:
+            start = i
+        elif value <= row_threshold and start is not None:
+            if i - start >= min_line_h:
+                lines.append((start, i))
+            start = None
+    if start is not None and h - start >= min_line_h:
+        lines.append((start, h))
+
+    if len(lines) < 4:  # short notes: a single full-page pass is enough
+        return []
+
+    bands: List[tuple] = []
+    pad = max(8, h // 120)
+    for i in range(0, len(lines), max_lines_per_band):
+        group = lines[i : i + max_lines_per_band]
+        top = max(0, group[0][0] - pad)
+        bottom = min(h, group[-1][1] + pad)
+        bands.append((top, bottom))
+    return bands[:12]  # safety cap on model calls
+
+
+def prepare_vision_inputs(img_bytes: bytes, max_dim: int = 2400) -> dict:
+    """Deskew + contrast-enhance the page, then return the full page plus
+    high-resolution line bands, all base64 JPEG."""
+    gray = _decode_gray(img_bytes)
+    gray = _resize_max(gray, max_dim)
+    gray = _enhance(_deskew(gray))
+
+    bands = []
+    for top, bottom in _line_bands(gray):
+        crop = gray[top:bottom, :]
+        if crop.shape[1] < 1600:  # upscale narrow crops for finer strokes
+            scale = 1600 / crop.shape[1]
+            crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        bands.append(_to_b64_jpeg(crop))
+
+    return {"page": _to_b64_jpeg(gray), "bands": bands}
+
+
+LANG_HINT = (
+    "The notes are mostly Bengali (Bangla) handwriting and may mix in English words, numbers and "
+    "abbreviations. Keep Bengali in Bengali script and English in Latin script."
+)
+
 VISION_OCR_SYSTEM = (
     "You are an expert handwriting transcription engine for Bengali (Bangla) and English. "
-    "You are given a photo of handwritten (or printed) notes. Transcribe every word you can read, "
-    "in reading order, keeping the original language of each part (Bengali stays Bengali, English "
-    "stays English). Fix obvious handwriting/spelling slips, add sensible punctuation and keep the "
-    "line/paragraph structure of the page. Never translate, never summarise, never add commentary, "
-    "headings or explanations that are not on the page. If a word is truly illegible write it as [?]. "
+    f"{LANG_HINT} "
+    "Transcribe every word you can read, in reading order, preserving the line and paragraph "
+    "structure. Match the handwriting exactly — do not paraphrase, translate, summarise, complete "
+    "unfinished sentences or add commentary, headings or explanations that are not on the page. "
+    "Correct only obvious letter-shape confusions so the words are real words in their language. "
+    "If a word is truly illegible write [?]. "
     "If the image contains no readable text at all, reply with exactly: NO_TEXT_FOUND. "
-    "Reply with ONLY the transcribed text."
+    "Reply with ONLY the transcribed text — no preamble, no markdown fences."
+)
+
+PAGE_PROMPT = "Transcribe all handwritten text in this page image."
+BAND_PROMPT = (
+    "This is a horizontal strip cropped from a page of handwritten notes. Transcribe only the "
+    "text lines visible in this strip, one line per output line."
+)
+REFINE_SYSTEM = (
+    "You are a meticulous proofreader for handwriting transcription of Bengali (Bangla) and "
+    f"English notes. {LANG_HINT} "
+    "You get the page image and a draft transcription. Compare them word by word and output a "
+    "corrected transcription: fix misread characters, wrong words, missing or duplicated lines and "
+    "broken conjunct letters, and drop anything that is not actually written on the page. Keep the "
+    "original wording, language and line structure. Reply with ONLY the corrected transcription."
 )
 
 HF_ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
 HF_OCR_MODEL = os.environ.get("HF_OCR_MODEL", "google/gemma-4-31B-it")
+
+# Engine id -> (provider, model). Order here is also the fallback order.
+AI_ENGINES: dict = {
+    "gemini-pro": ("gemini", "gemini-3.1-pro-preview"),
+    "gemini-flash": ("gemini", "gemini-3-flash-preview"),
+    "gemma": ("hf", HF_OCR_MODEL),
+}
+DEFAULT_ENGINE = "gemini-pro"
 
 
 def _finalize_ocr_text(text: str) -> str:
     text = text.strip()
     if text.upper().startswith("NO_TEXT_FOUND"):
         return ""
+    text = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", text.strip())
     return _clean_text(text)
 
 
-async def run_gemma_ocr(img_bytes: bytes) -> str:
-    """Gemma 4 (open model) vision OCR via Hugging Face Inference Providers."""
+async def _hf_vision_call(model: str, image_b64: str, prompt: str, system: str) -> str:
     token = os.environ.get("HF_TOKEN", "")
     if not token:
         raise RuntimeError("HF_TOKEN is not configured")
-    image_b64 = await asyncio.to_thread(prepare_for_vision_sync, img_bytes)
     payload = {
-        "model": HF_OCR_MODEL,
+        "model": model,
         "messages": [
-            {"role": "system", "content": VISION_OCR_SYSTEM},
+            {"role": "system", "content": system},
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "Transcribe the handwritten text in this image."},
+                    {"type": "text", "text": prompt},
                     {
                         "type": "image_url",
                         "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
@@ -233,39 +334,76 @@ async def run_gemma_ocr(img_bytes: bytes) -> str:
         "temperature": 0,
         "stream": False,
     }
-    async with httpx.AsyncClient(timeout=120) as http:
+    async with httpx.AsyncClient(timeout=180) as http:
         res = await http.post(
-            HF_ROUTER_URL,
-            headers={"Authorization": f"Bearer {token}"},
-            json=payload,
+            HF_ROUTER_URL, headers={"Authorization": f"Bearer {token}"}, json=payload
         )
     if res.status_code >= 400:
         raise RuntimeError(f"Hugging Face request failed ({res.status_code}): {res.text[:200]}")
     body = res.json()
     try:
-        text = body["choices"][0]["message"]["content"]
+        content = body["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError):
         raise RuntimeError("Unexpected Hugging Face response")
-    if isinstance(text, list):  # some providers return content parts
-        text = "".join(part.get("text", "") for part in text if isinstance(part, dict))
-    return _finalize_ocr_text(str(text))
+    if isinstance(content, list):  # some providers return content parts
+        content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+    return str(content)
 
 
-async def run_vision_ocr(img_bytes: bytes) -> str:
-    """Gemini 3 Flash vision OCR. Raises on failure so another engine can take over."""
-    image_b64 = await asyncio.to_thread(prepare_for_vision_sync, img_bytes)
+async def _llm_vision_call(model: str, image_b64: str, prompt: str, system: str) -> str:
     chat = LlmChat(
         api_key=os.environ.get("EMERGENT_LLM_KEY", ""),
         session_id=f"ocr-{uuid.uuid4().hex}",
-        system_message=VISION_OCR_SYSTEM,
-    ).with_model("gemini", "gemini-3-flash-preview")
+        system_message=system,
+    ).with_model("gemini", model)
     result = await chat.send_message(
-        UserMessage(
-            text="Transcribe the handwritten text in this image.",
-            file_contents=[ImageContent(image_base64=image_b64)],
-        )
+        UserMessage(text=prompt, file_contents=[ImageContent(image_base64=image_b64)])
     )
-    return _finalize_ocr_text(str(result))
+    return str(result)
+
+
+async def vision_call(engine: str, image_b64: str, prompt: str, system: str) -> str:
+    provider, model = AI_ENGINES[engine]
+    if provider == "hf":
+        return await _hf_vision_call(model, image_b64, prompt, system)
+    return await _llm_vision_call(model, image_b64, prompt, system)
+
+
+async def run_ai_ocr(engine: str, img_bytes: bytes) -> str:
+    """High-accuracy pipeline: deskew/enhance → line-band passes → full-page proofread.
+
+    Raises on model failure so the caller can fall back to another engine.
+    """
+    prepared = await asyncio.to_thread(prepare_vision_inputs, img_bytes)
+
+    if prepared["bands"]:
+        parts = await asyncio.gather(
+            *[vision_call(engine, band, BAND_PROMPT, VISION_OCR_SYSTEM) for band in prepared["bands"]]
+        )
+        draft = "\n".join(p.strip() for p in parts if p.strip() and "NO_TEXT_FOUND" not in p.upper())
+    else:
+        draft = await vision_call(engine, prepared["page"], PAGE_PROMPT, VISION_OCR_SYSTEM)
+
+    draft = _finalize_ocr_text(draft)
+    if not draft:
+        return ""
+
+    try:
+        refined = await vision_call(
+            engine,
+            prepared["page"],
+            f"Draft transcription to verify and correct:\n\n{draft}",
+            REFINE_SYSTEM,
+        )
+        refined = _finalize_ocr_text(refined)
+    except Exception:
+        logging.exception("refine pass failed; keeping draft")
+        return draft
+
+    # A refine pass that throws most of the text away is a bad sign — keep the draft.
+    if not refined or len(refined) < 0.5 * len(draft):
+        return draft
+    return refined
 
 
 # ---------- Routes ----------
@@ -287,22 +425,20 @@ async def quality_check(file: UploadFile = File(...)):
 
 
 @api_router.post("/extract")
-async def extract_text(file: UploadFile = File(...), engine: str = Form("auto")):
+async def extract_text(file: UploadFile = File(...), engine: str = Form(DEFAULT_ENGINE)):
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Empty file")
 
-    # Engine preference: "auto"/"gemma" -> Gemma 4, then Gemini, then offline Tesseract.
-    # "gemini" -> Gemini first. Tesseract is always the last resort.
-    order = ["gemini", "gemma"] if engine == "gemini" else ["gemma", "gemini"]
-    runners = {"gemma": run_gemma_ocr, "gemini": run_vision_ocr}
+    preferred = engine if engine in AI_ENGINES else DEFAULT_ENGINE
+    order = [preferred] + [e for e in AI_ENGINES if e != preferred]
 
     text = ""
     used = ""
     errors: List[str] = []
     for name in order:
         try:
-            text = await runners[name](data)
+            text = await run_ai_ocr(name, data)
             used = name
             break
         except ValueError:

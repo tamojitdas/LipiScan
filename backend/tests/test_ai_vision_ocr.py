@@ -112,7 +112,7 @@ class TestExtractAIEngine:
         assert r.status_code == 200, r.text
         data = r.json()
         assert set(["id", "text", "engine"]).issubset(data.keys()), data
-        assert data["engine"] in {"gemma", "gemini"}, f"Expected an AI engine, got {data['engine']}: {data['text']!r}"
+        assert data["engine"] in {"gemini-pro", "gemini-flash", "gemma"}, f"Expected an AI engine, got {data['engine']}: {data['text']!r}"
         text_lower = data["text"].lower()
         # At least two of the expected key words should be present — vision is not exact
         expected_words = ["quick", "brown", "fox", "lazy", "dog", "handwriting", "hello"]
@@ -133,7 +133,7 @@ class TestExtractAIEngine:
         )
         assert r.status_code == 200, r.text
         data = r.json()
-        assert data["engine"] in {"gemma", "gemini"}, f"Expected an AI engine, got {data}"
+        assert data["engine"] in {"gemini-pro", "gemini-flash", "gemma"}, f"Expected an AI engine, got {data}"
         text = data["text"]
         # Must contain Bengali characters (U+0980–U+09FF)
         has_bengali = any("\u0980" <= c <= "\u09FF" for c in text)

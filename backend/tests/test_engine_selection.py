@@ -79,7 +79,7 @@ class TestEngineSelection:
         )
         assert r.status_code == 200, r.text
         data = r.json()
-        assert data["engine"] in {"gemma", "gemini"}, data
+        assert data["engine"] in {"gemini-pro", "gemini-flash", "gemma"}, data
         # If HF is up, 'auto' should prefer gemma. Accept gemini as graceful fallback.
         assert "id" in data and isinstance(data["text"], str)
 
@@ -93,7 +93,7 @@ class TestEngineSelection:
         assert r.status_code == 200, r.text
         data = r.json()
         # Must be in {gemma, gemini} (gemini only if Gemma failed and fell back)
-        assert data["engine"] in {"gemma", "gemini", "tesseract"}, data
+        assert data["engine"] in {"gemini-pro", "gemini-flash", "gemma", "tesseract"}, data
         # Prefer gemma when HF_TOKEN is set in .env
         assert data["engine"] == "gemma", f"expected gemma, got {data['engine']} (text={data['text']!r})"
         low = data["text"].lower()
@@ -116,13 +116,13 @@ class TestEngineSelection:
     def test_engine_gemini_explicit(self, session):
         r = session.post(
             f"{API}/extract",
-            data={"engine": "gemini"},
+            data={"engine": "gemini-flash"},
             files={"file": ("en.jpg", _en_image(), "image/jpeg")},
             timeout=120,
         )
         assert r.status_code == 200, r.text
         data = r.json()
-        assert data["engine"] == "gemini", f"expected gemini, got {data}"
+        assert data["engine"] == "gemini-flash", f"expected gemini, got {data}"
         low = data["text"].lower()
         hits = sum(1 for w in ["quick", "brown", "fox", "lazy", "dog"] if w in low)
         assert hits >= 3, f"too few keywords: {data['text']!r}"
