@@ -46,10 +46,18 @@ export default function History() {
   return (
     <View style={styles.root}>
       <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-        <View>
+        <View style={{ flex: 1 }}>
           <Text style={styles.title}>LipiScan</Text>
           <Text style={styles.subtitle}>Bengali & English handwriting to Word</Text>
         </View>
+        <Pressable
+          testID="home-settings-button"
+          hitSlop={10}
+          style={styles.headerBtn}
+          onPress={() => router.push("/settings")}
+        >
+          <Icon name="cog-outline" size={22} color={colors.onSurfaceSecondary} />
+        </Pressable>
       </View>
 
       {isLoading ? (
@@ -121,11 +129,22 @@ export default function History() {
 const useStyles = makeStyles((colors) => ({
   root: { flex: 1, backgroundColor: colors.surface },
   header: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
     paddingHorizontal: 16,
     paddingBottom: 16,
     backgroundColor: colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: colors.divider,
+  },
+  headerBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.surfaceSecondary,
+    alignItems: "center",
+    justifyContent: "center",
   },
   title: { fontFamily: "Outfit", fontSize: 28, color: colors.onSurface, fontWeight: "600" },
   subtitle: { fontFamily: "Figtree", fontSize: 14, color: colors.muted, marginTop: 2 },

@@ -1,0 +1,41 @@
+{
+  "summary": "Iteration 4 verified: Gemma 4 (31B) via Hugging Face as primary OCR engine with Gemini 3 Flash + Tesseract fallbacks and a Settings screen for engine selection. BACKEND: 32/32 pytest green (26 regression + 6 new engine-selection tests in tests/test_engine_selection.py). Verified: (a) engine omitted/'auto' -> Gemma used (engine=='gemma'), (b) engine='gemma' + English handwriting-style JPEG -> engine=='gemma', text contains >=3 keywords of 'quick/brown/fox/lazy/dog', (c) engine='gemma' + Bengali JPEG (Lohit-Bengali) -> engine=='gemma', U+0980-U+09FF Bengali block preserved (no translation), (d) engine='gemini' -> engine=='gemini' with correct text, (e) empty + invalid image -> 400. FALLBACK CHAIN verified end-to-end via destructive script tests/test_fallback_chain.py: broke HF_TOKEN only -> response engine=='gemini'; broke HF_TOKEN + EMERGENT_LLM_KEY -> engine=='tesseract'; .env RESTORED and backend restarted; post-restore engine=gemma extract -> engine=='gemma' (confirmed). All regression suites still green: /api/quality-check (handwriting has_text true for English+Bengali, blank still flags no_text, blur, dim, empty 400), /api/extract + /api/history list + soft-delete, /api/append-docx (end + after_heading + heading-not-found 404 + invalid docx 400), /api/download/{id} (download works, Bengali text survives), /api/cleanup (mixed Bengali+English, empty/whitespace/missing field validation). FRONTEND (web preview, 390x844 mobile viewport): gear button on Home (testID home-settings-button) navigates to /settings; both options settings-engine-gemma and settings-engine-gemini render with correct radio state; selecting gemini writes localStorage['lipiscan.ocr_engine']='\"gemini\"' (JSON-stringified via AsyncStorage web shim); after full page reload the Gemini radio is still marked (persistence confirmed visually); switching back to Gemma persists likewise; settings-back-button returns to Home. review-engine-hint / review-fallback-hint only verified via code review (app/review.tsx:143-152) because camera capture is device-only. No deprecated Expo packages or SafeAreaView misuse detected.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_lipiscan_api.py",
+    "/app/backend/tests/test_ai_vision_ocr.py",
+    "/app/backend/tests/test_engine_selection.py",
+    "/app/backend/tests/test_fallback_chain.py",
+    "/app/test_reports/pytest/iter4_results.xml"
+  ],
+  "action_items": [
+    "None blocking. Backend + frontend ready for user hand-off.",
+    "Optional carried-over: replace deprecated @app.on_event('startup'/'shutdown') with FastAPI lifespan handlers in backend/server.py.",
+    "Optional carried-over: pin tesseract-ocr system packages in the container image so ensure_tesseract() is not the primary install path.",
+    "Optional: /api/extract has no explicit max-bytes guard — a very large upload would base64-expand into the Gemma/Gemini payload. Consider a 413 limit."
+  ],
+  "critical_code_review_comments": [
+    "backend/server.py:289-329 /api/extract now accepts engine form field with values auto/gemma/gemini and orders runners accordingly; Tesseract is last resort inside the no-engine-succeeded branch — correct behaviour matches spec.",
+    "backend/server.py:212-251 run_gemma_ocr posts to https://router.huggingface.co/v1/chat/completions with OpenAI-compatible messages[] + image data URL; raises RuntimeError on HTTP>=400 so /api/extract can fall back to Gemini. Handles both string and list content shapes from HF providers.",
+    "backend/server.py:308 ValueError from either runner is correctly re-raised as 400 (invalid image) BEFORE trying the next engine — invalid images never cascade to Tesseract.",
+    "frontend/app/settings.tsx:11-77 Settings screen uses getOcrEngine/setOcrEngine with the shared storage wrapper (lipiscan.ocr_engine). Radio uses radiobox-marked/blank icons and borderColor change on selected card. All interactive elements have testIDs.",
+    "frontend/app/review.tsx:70-72 Review builds the extract form with the stored engine via `form.append('engine', await getOcrEngine())` — correct wiring between Settings preference and backend engine selection.",
+    "frontend/src/settings.ts:22-29 getOcrEngine defaults to 'gemma' and whitelists the two allowed values — any corrupt stored value coerces back to 'gemma'. ENGINE_LABELS also covers 'tesseract' so the fallback hint can render friendly copy."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_engine_selection.py (new — 6 tests covering engine form field: default/gemma/gemini explicit, Bengali preservation under gemma, empty+invalid image 400)",
+    "/app/backend/tests/test_fallback_chain.py (new — destructive script: breaks HF_TOKEN -> expects gemini, breaks both tokens -> expects tesseract, restores .env, verifies gemma healthy again)"
+  ],
+  "success_rate": {"backend": "100% (32/32 pytest + fallback-chain script passed all 3 phases)", "frontend": "100% of testable web flows (home gear -> settings -> select -> persist across reload -> back to home); camera capture is device-only, not run"},
+  "seed_data_creation": "Each /api/extract test created ephemeral history entries (quick brown fox variants, আমার সোনার বাংলা, Hello Fallback Test). Soft-delete tests cleaned up their own ids. Remaining test rows are small snippets and acceptable as fixtures.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend URL: EXPO_PUBLIC_BACKEND_URL=https://docx-capture.preview.emergentagent.com. /app/backend/.env must contain MONGO_URL, DB_NAME, EMERGENT_LLM_KEY (for /api/cleanup gpt-5.4 and Gemini vision via emergentintegrations), HF_TOKEN + HF_OCR_MODEL=google/gemma-4-31B-it (for Gemma via HF router https://router.huggingface.co/v1/chat/completions). After mutating .env for destructive tests, ALWAYS restore from backup then `sudo supervisorctl restart backend` and verify engine=gemma extract returns engine=='gemma'. Tesseract binary + fonts-lohit-beng-bengali + ben+eng traineddata must be present (ensure_tesseract() self-heals on startup). Frontend persists OCR engine under localStorage key 'lipiscan.ocr_engine' (JSON-stringified value \"gemma\"|\"gemini\") via AsyncStorage web shim. /review and /camera still require device capture.",
+  "rca_of_issue": "N/A — no bugs. The iteration-4 feature set (Gemma primary + fallback chain + Settings screen + engine form field) is working end-to-end as specified."
+}

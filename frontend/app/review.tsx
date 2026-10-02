@@ -10,9 +10,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { buildImageForm, postForm } from "@/src/api";
 import { API_BASE, session } from "@/src/session";
+import { ENGINE_LABELS, getOcrEngine } from "@/src/settings";
 import { makeStyles, useTheme } from "@/src/theme";
 
-type ExtractResult = { id: string; text: string; engine?: "ai" | "tesseract" };
+type ExtractResult = { id: string; text: string; engine?: "gemma" | "gemini" | "tesseract" };
 
 export default function Review() {
   const insets = useSafeAreaInsets();
@@ -66,6 +67,7 @@ export default function Review() {
     staleTime: Infinity,
     queryFn: async () => {
       const form = await buildImageForm(uri!);
+      form.append("engine", await getOcrEngine());
       return postForm<ExtractResult>("/extract", form);
     },
   });
@@ -140,8 +142,12 @@ export default function Review() {
         ) : null}
         {data?.engine === "tesseract" ? (
           <Text style={styles.fallbackHint} testID="review-fallback-hint">
-            AI reader was unavailable, so offline OCR was used — results may be rough. Tap AI Cleanup
-            or retry.
+            AI readers were unavailable, so offline OCR was used — results may be rough. Tap AI
+            Cleanup or retry.
+          </Text>
+        ) : data?.engine ? (
+          <Text style={styles.engineHint} testID="review-engine-hint">
+            Read by {ENGINE_LABELS[data.engine]}
           </Text>
         ) : null}
         {isLoading ? (
@@ -239,6 +245,7 @@ const useStyles = makeStyles((colors) => ({
   errorText: { fontFamily: "Figtree", fontSize: 14, color: colors.error, textAlign: "center" },
   emptyHint: { fontFamily: "Figtree", fontSize: 13, color: colors.warning },
   fallbackHint: { fontFamily: "Figtree", fontSize: 12, color: colors.warning, lineHeight: 17 },
+  engineHint: { fontFamily: "Figtree", fontSize: 12, color: colors.muted },
   input: {
     flex: 1,
     backgroundColor: colors.surfaceSecondary,

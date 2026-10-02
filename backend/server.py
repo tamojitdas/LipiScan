@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Annotated, List, Optional
 
 import cv2
+import httpx
 import numpy as np
 import pytesseract
 from docx import Document as DocxDocument
@@ -45,6 +46,7 @@ def ensure_tesseract():
         return
     logging.warning("tesseract not found; installing tesseract-ocr (ben+eng)...")
     try:
+        subprocess.run(["apt-get", "update", "-qq"], check=False, capture_output=True, timeout=300)
         subprocess.run(
             ["apt-get", "install", "-y", "-qq", "tesseract-ocr", "tesseract-ocr-ben", "tesseract-ocr-eng"],
             check=True,
@@ -196,9 +198,61 @@ VISION_OCR_SYSTEM = (
     "Reply with ONLY the transcribed text."
 )
 
+HF_ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
+HF_OCR_MODEL = os.environ.get("HF_OCR_MODEL", "google/gemma-4-31B-it")
+
+
+def _finalize_ocr_text(text: str) -> str:
+    text = text.strip()
+    if text.upper().startswith("NO_TEXT_FOUND"):
+        return ""
+    return _clean_text(text)
+
+
+async def run_gemma_ocr(img_bytes: bytes) -> str:
+    """Gemma 4 (open model) vision OCR via Hugging Face Inference Providers."""
+    token = os.environ.get("HF_TOKEN", "")
+    if not token:
+        raise RuntimeError("HF_TOKEN is not configured")
+    image_b64 = await asyncio.to_thread(prepare_for_vision_sync, img_bytes)
+    payload = {
+        "model": HF_OCR_MODEL,
+        "messages": [
+            {"role": "system", "content": VISION_OCR_SYSTEM},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Transcribe the handwritten text in this image."},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
+                    },
+                ],
+            },
+        ],
+        "temperature": 0,
+        "stream": False,
+    }
+    async with httpx.AsyncClient(timeout=120) as http:
+        res = await http.post(
+            HF_ROUTER_URL,
+            headers={"Authorization": f"Bearer {token}"},
+            json=payload,
+        )
+    if res.status_code >= 400:
+        raise RuntimeError(f"Hugging Face request failed ({res.status_code}): {res.text[:200]}")
+    body = res.json()
+    try:
+        text = body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        raise RuntimeError("Unexpected Hugging Face response")
+    if isinstance(text, list):  # some providers return content parts
+        text = "".join(part.get("text", "") for part in text if isinstance(part, dict))
+    return _finalize_ocr_text(str(text))
+
 
 async def run_vision_ocr(img_bytes: bytes) -> str:
-    """Primary OCR: Gemini 3 Flash vision. Raises on failure so Tesseract can take over."""
+    """Gemini 3 Flash vision OCR. Raises on failure so another engine can take over."""
     image_b64 = await asyncio.to_thread(prepare_for_vision_sync, img_bytes)
     chat = LlmChat(
         api_key=os.environ.get("EMERGENT_LLM_KEY", ""),
@@ -211,10 +265,7 @@ async def run_vision_ocr(img_bytes: bytes) -> str:
             file_contents=[ImageContent(image_base64=image_b64)],
         )
     )
-    text = str(result).strip()
-    if text.upper().startswith("NO_TEXT_FOUND"):
-        return ""
-    return _clean_text(text)
+    return _finalize_ocr_text(str(result))
 
 
 # ---------- Routes ----------
@@ -236,22 +287,35 @@ async def quality_check(file: UploadFile = File(...)):
 
 
 @api_router.post("/extract")
-async def extract_text(file: UploadFile = File(...)):
+async def extract_text(file: UploadFile = File(...), engine: str = Form("auto")):
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Empty file")
 
-    engine = "ai"
+    # Engine preference: "auto"/"gemma" -> Gemma 4, then Gemini, then offline Tesseract.
+    # "gemini" -> Gemini first. Tesseract is always the last resort.
+    order = ["gemini", "gemma"] if engine == "gemini" else ["gemma", "gemini"]
+    runners = {"gemma": run_gemma_ocr, "gemini": run_vision_ocr}
+
     text = ""
-    try:
-        text = await run_vision_ocr(data)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid image")
-    except Exception:
-        logging.exception("vision OCR failed; falling back to tesseract")
-        engine = "tesseract"
+    used = ""
+    errors: List[str] = []
+    for name in order:
+        try:
+            text = await runners[name](data)
+            used = name
+            break
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid image")
+        except Exception as exc:
+            errors.append(f"{name}: {exc}")
+            logging.warning("%s OCR failed: %s", name, exc)
+
+    if not used:
+        logging.error("all vision engines failed: %s", " | ".join(errors))
         try:
             text = await asyncio.to_thread(run_ocr_sync, data)
+            used = "tesseract"
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid image")
 
@@ -262,7 +326,7 @@ async def extract_text(file: UploadFile = File(...)):
         created_at=datetime.now(timezone.utc),
     )
     res = await db.history.insert_one(item.to_mongo())
-    return {"id": str(res.inserted_id), "text": text, "engine": engine}
+    return {"id": str(res.inserted_id), "text": text, "engine": used}
 
 
 @api_router.get("/history")

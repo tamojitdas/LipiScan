@@ -22,6 +22,15 @@ User requested a native Android (Kotlin/Jetpack Compose) app for extracting hand
 - GET /api/download/{download_id}
 
 ## Implemented (June 2026)
+### Iteration 4 — Gemma 4 as primary engine + Settings
+- User asked to use the open model Gemma 4 for scanning/parsing. `google/gemma-4-12B-it` is NOT deployed by any HF Inference Provider → chose `google/gemma-4-31B-it` (user approved)
+- Gemma 4 31B called via Hugging Face Inference Providers router (`https://router.huggingface.co/v1/chat/completions`, OpenAI-compatible, image sent as base64 data URL, temperature 0). Secrets: `HF_TOKEN`, `HF_OCR_MODEL` in backend/.env (server-side only)
+- POST /api/extract takes optional form field `engine` ("auto" | "gemma" | "gemini"); chain = preferred AI engine → other AI engine → offline Tesseract. Response `engine` is now "gemma" | "gemini" | "tesseract"
+- New Settings screen (`app/settings.tsx`) with OCR-engine picker, reached from the gear button on Home; preference persisted via AsyncStorage (`lipiscan.ocr_engine`) in `src/settings.ts` and sent with every extract
+- Review screen shows "Read by <engine>" or the offline-fallback warning
+- ensure_tesseract() now runs `apt-get update` before install (tesseract had disappeared after a container restart); fonts-lohit-beng-bengali installed for Bengali test images
+- Tested: 32/32 backend pytest (engine selection + destructive fallback chain with .env restored) + frontend settings/persistence flows
+
 ### Iteration 3 — AI Vision OCR for handwriting
 - Problem: Tesseract garbled handwritten Bengali/English (user-reported wrong results)
 - POST /api/extract now uses Gemini 3 Flash vision (`gemini-3-flash-preview` via emergentintegrations + Emergent LLM key) as primary engine — transcribes AND cleans/formats in one pass; Tesseract runs only as offline fallback when the AI call fails. Response adds `engine: "ai" | "tesseract"`
