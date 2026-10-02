@@ -1,0 +1,33 @@
+{
+  "summary": "Iteration 5 bug-fix VERIFIED end-to-end on the public preview URL. The /quality bottom sheet now uses maxHeight 78% with an inner ScrollView (testID quality-sheet-scroll) and is reachable + scrollable + its action buttons are clickable on small-phone viewports. Reproduced the full flow on web by using Playwright's file-chooser on the camera permission gate (tap new-scan-fab -> camera-pick-gallery-fallback -> expect_file_chooser + set_files on a locally generated handwriting-style JPEG). Verified at 390x844 (good handwriting image, sheet shows 'Looks good!' with Extract Text + Retake) and 360x640 short viewport (blurry+dark image, sheet shows 'Quality issues found' with multiple issue messages + Retake + Proceed Anyway). In both cases: (a) ScrollView present, (b) sheet height <= 78% of viewport, (c) sheet does not exceed viewport bottom (390: box y=465 h=379 vp=844, 360: box y=183 h=457 vp=640, both within 78% cap of 658 / 499), (d) last action button bounding box fully inside viewport after scrolling to end of sheetScroll. Proceed-to-review flow confirmed: Extract Text -> /review -> loading copy renders -> review-text-input + review-engine-hint 'Read by Gemma 4 (31B)' render -> extracted text matches the uploaded image ('The quick brown fox / jumps over the lazy dog / Handwritten notes test / Second line here / Third line of text') -> Append to Document button reachable (y+h=828 within 844). Regression: Home gear (home-settings-button) -> /settings -> selecting gemini writes localStorage['lipiscan.ocr_engine']='\"gemini\"' and reverting to gemma writes '\"gemma\"' (persistence intact). Zero JS console errors across the entire session. Backend regression: pytest 32/32 green (test_lipiscan_api.py + test_ai_vision_ocr.py + test_engine_selection.py in 15.93s). No deprecated Expo packages or SafeAreaView misuse newly introduced in quality.tsx.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_lipiscan_api.py",
+    "/app/backend/tests/test_ai_vision_ocr.py",
+    "/app/backend/tests/test_engine_selection.py",
+    "/app/backend/tests/test_fallback_chain.py",
+    "/app/test_reports/pytest/iter5_results.xml"
+  ],
+  "action_items": [
+    "None blocking. Iteration-5 bug fix is verified on web preview; expected to behave identically in Expo Go on device since the fix is pure React Native layout (maxHeight + ScrollView with contentContainerStyle bottom inset)."
+  ],
+  "critical_code_review_comments": [
+    "frontend/app/quality.tsx:156-167 sheet uses maxHeight: '78%' + paddingTop: 12 and sheetScroll uses flexGrow: 0 so the ScrollView does not force the sheet to the top of the screen while still enabling vertical scroll when content exceeds the sheet height — matches the reported fix.",
+    "frontend/app/quality.tsx:70-75 inner ScrollView has testID quality-sheet-scroll, showsVerticalScrollIndicator true, and contentContainerStyle merges sheetContent with { paddingBottom: insets.bottom + 20 } so last button clears the home indicator — correct.",
+    "frontend/app/quality.tsx:116-136 both action-button pairs (ok -> extract+retake, issues -> retake+proceed-anyway) remain the LAST children of the ScrollView and are reachable at the end of scroll on 360x640 and 390x844 viewports.",
+    "frontend/app/review.tsx:91-96 KeyboardAvoidingView uses behavior padding for iOS and height for Android with keyboardVerticalOffset 16 — compatible with the small viewports used here; Append button stays reachable."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (32/32 pytest)", "frontend": "100% (bottom-sheet scroll + buttons reachable at 390x844 and 360x640, quality -> review flow + engine hint, settings regression, zero console errors)"},
+  "seed_data_creation": "Generated two local JPEGs at /tmp/testimg/handwriting_good.jpg and /tmp/testimg/handwriting_bad.jpg using PIL (per /app/image_testing.md: real visual features, JPEG mime). The good image was ingested by /api/extract and created one history row ('The quick brown fox...') — small snippet, safe to leave as fixture.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Driving /quality on web without a real camera: tap new-scan-fab -> camera-pick-gallery-fallback (visible on the permission gate on web) -> use page.expect_file_chooser() + fc.set_files(path) with a handwriting-style JPEG. That sets session.photoUri and router.push('/quality'). Use mobile viewports (390x844 and 360x640 verified). All relevant testIDs: new-scan-fab, camera-pick-gallery-fallback, camera-gallery-button, quality-sheet, quality-sheet-scroll, quality-result-title, quality-check-{blur|dim|no_text}, quality-extract-button, quality-retake-button, quality-proceed-anyway-button, review-loading, review-text-input, review-engine-hint, review-fallback-hint, review-append-button, home-settings-button, settings-engine-gemma, settings-engine-gemini. Backend URL: EXPO_PUBLIC_BACKEND_URL=https://docx-capture.preview.emergentagent.com.",
+  "rca_of_issue": "Pre-fix: /quality bottom sheet was `position:absolute; bottom:0` with no max-height and no inner ScrollView, so on short phone screens the 3 check rows + 2 issue messages + 2 buttons expanded past the top of the screen with no way to scroll — buttons became unreachable. Fix (iteration 5): added maxHeight 78% to the sheet and wrapped the dynamic content in a ScrollView (testID quality-sheet-scroll) with contentContainerStyle paddingBottom = insets.bottom + 20. Verified at 390x844 and 360x640 that sheet is clipped to 78% of viewport, content scrolls, and the last action button sits inside the viewport after scrolling to the bottom. Confirmed proceeding from the sheet still navigates to /review and the OCR path renders correctly."
+}

@@ -22,6 +22,11 @@ User requested a native Android (Kotlin/Jetpack Compose) app for extracting hand
 - GET /api/download/{download_id}
 
 ## Implemented (June 2026)
+### Iteration 5 — Scrollable quality sheet (mobile fix)
+- Bug (Expo Go, real phone): the post-capture quality bottom sheet was a fixed absolute View, so on phone screens its content overflowed and could not be scrolled — buttons were unreachable
+- Fix: sheet now `maxHeight: 78%` with the content inside a ScrollView (`quality-sheet-scroll`), bottom safe-area inset applied to the scroll content
+- Verified by testing agent at 390×844 and 360×640 (incl. a blurry+dark image with multiple issues): sheet stays in the viewport, scrolls, both actions reachable; review flow + Settings regression + 32/32 pytest green
+
 ### Iteration 4 — Gemma 4 as primary engine + Settings
 - User asked to use the open model Gemma 4 for scanning/parsing. `google/gemma-4-12B-it` is NOT deployed by any HF Inference Provider → chose `google/gemma-4-31B-it` (user approved)
 - Gemma 4 31B called via Hugging Face Inference Providers router (`https://router.huggingface.co/v1/chat/completions`, OpenAI-compatible, image sent as base64 data URL, temperature 0). Secrets: `HF_TOKEN`, `HF_OCR_MODEL` in backend/.env (server-side only)

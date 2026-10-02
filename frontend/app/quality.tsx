@@ -4,7 +4,7 @@ import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { useEffect } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Animated, { SlideInDown } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -63,10 +63,16 @@ export default function Quality() {
 
       <Animated.View
         entering={SlideInDown.springify().damping(18)}
-        style={[styles.sheet, { paddingBottom: insets.bottom + 20 }]}
+        style={styles.sheet}
         testID="quality-sheet"
       >
         <View style={styles.handle} />
+        <ScrollView
+          testID="quality-sheet-scroll"
+          style={styles.sheetScroll}
+          contentContainerStyle={[styles.sheetContent, { paddingBottom: insets.bottom + 20 }]}
+          showsVerticalScrollIndicator
+        >
         {isLoading ? (
           <View style={styles.loadingRow}>
             <ActivityIndicator color={colors.brandPrimary} />
@@ -130,6 +136,7 @@ export default function Quality() {
             )}
           </>
         ) : null}
+        </ScrollView>
       </Animated.View>
     </View>
   );
@@ -151,12 +158,14 @@ const useStyles = makeStyles((colors) => ({
     left: 0,
     right: 0,
     bottom: 0,
+    maxHeight: "78%",
     backgroundColor: colors.surface,
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    padding: 24,
-    gap: 12,
+    paddingTop: 12,
   },
+  sheetScroll: { flexGrow: 0 },
+  sheetContent: { paddingHorizontal: 24, paddingTop: 8, gap: 12 },
   handle: {
     alignSelf: "center",
     width: 40,
