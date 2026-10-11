@@ -17,6 +17,7 @@ import pytest
 import requests
 from docx import Document
 from PIL import Image, ImageDraw, ImageFont
+from extract_client import extract
 
 BASE_URL = os.environ["EXPO_PUBLIC_BACKEND_URL"].rstrip("/") if os.environ.get(
     "EXPO_PUBLIC_BACKEND_URL"
@@ -161,11 +162,7 @@ class TestExtractAndHistory:
 
     def test_extract_creates_history(self, session):
         img = _make_text_image("TEST hello world")
-        r = session.post(
-            f"{API}/extract", files={"file": ("t.jpg", img, "image/jpeg")}
-        )
-        assert r.status_code == 200, r.text
-        data = r.json()
+        data = extract(("t.jpg", img, "image/jpeg"))
         assert "id" in data and "text" in data
         assert isinstance(data["text"], str)
         TestExtractAndHistory.created_ids.append(data["id"])

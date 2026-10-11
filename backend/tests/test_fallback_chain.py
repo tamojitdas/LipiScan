@@ -18,6 +18,7 @@ from pathlib import Path
 
 import requests
 from PIL import Image, ImageDraw, ImageFont
+from extract_client import extract
 
 ENV = Path("/app/backend/.env")
 BACKUP = Path("/app/backend/.env.bak_fallback_test")
@@ -76,14 +77,7 @@ def _render_image() -> bytes:
 
 
 def _extract(engine: str = "gemma") -> dict:
-    r = requests.post(
-        f"{API}/extract",
-        data={"engine": engine},
-        files={"file": ("t.jpg", _render_image(), "image/jpeg")},
-        timeout=180,
-    )
-    r.raise_for_status()
-    return r.json()
+    return extract(("t.jpg", _render_image(), "image/jpeg"), engine=engine)
 
 
 def main() -> int:

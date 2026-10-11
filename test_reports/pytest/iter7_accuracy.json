@@ -1,0 +1,29 @@
+{
+  "gemini-pro": {
+    "engine_requested": "gemini-pro",
+    "engine_echoed": "gemini-pro",
+    "status": 200,
+    "wall_clock_s": 56.77,
+    "chars": 1264,
+    "word_acc": 91.67,
+    "char_acc": 91.1
+  },
+  "gemini-flash": {
+    "engine_requested": "gemini-flash",
+    "engine_echoed": "gemini-flash",
+    "status": 200,
+    "wall_clock_s": 46.03,
+    "chars": 1253,
+    "word_acc": 92.54,
+    "char_acc": 92.65
+  },
+  "gemma": {
+    "engine_requested": "gemma",
+    "engine_echoed": "gemini-pro",
+    "status": 200,
+    "wall_clock_s": 72.36,
+    "chars": 1259,
+    "word_acc": 93.86,
+    "char_acc": 95.45
+  }
+}

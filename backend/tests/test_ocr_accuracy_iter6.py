@@ -22,6 +22,7 @@ import numpy as np
 import pytest
 import requests
 from PIL import Image, ImageDraw, ImageFont
+from extract_client import extract
 
 BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://docx-capture.preview.emergentagent.com").rstrip("/")
 API = f"{BASE_URL}/api"
@@ -158,14 +159,8 @@ def _word_accuracy(predicted: str, truth: str) -> float:
 
 def _post_extract(jpeg: bytes, name: str, engine: str = "gemini-pro"):
     t0 = time.monotonic()
-    r = requests.post(
-        f"{API}/extract",
-        data={"engine": engine},
-        files={"file": (name, jpeg, "image/jpeg")},
-        timeout=180,
-    )
-    dt = time.monotonic() - t0
-    return r, dt
+    data = extract((name, jpeg, "image/jpeg"), engine=engine)
+    return data, time.monotonic() - t0
 
 
 ACCURACY_FLOOR = 0.85
@@ -187,9 +182,7 @@ class TestAccuracyIteration6:
     def test_bengali_multiline(self, report):
         truth = "\n".join(BN_LINES)
         img = _to_jpeg(_render_mixed(BN_LINES))
-        r, dt = _post_extract(img, "bn_multi.jpg")
-        assert r.status_code == 200, r.text
-        data = r.json()
+        data, dt = _post_extract(img, "bn_multi.jpg")
         acc = _word_accuracy(data["text"], truth)
         report["cases"].append({
             "case": "bengali_multiline", "engine": data["engine"], "latency_s": round(dt, 2),
@@ -202,9 +195,7 @@ class TestAccuracyIteration6:
     def test_mixed_bengali_english(self, report):
         truth = "\n".join(MIXED_LINES)
         img = _to_jpeg(_render_mixed(MIXED_LINES))
-        r, dt = _post_extract(img, "mixed.jpg")
-        assert r.status_code == 200, r.text
-        data = r.json()
+        data, dt = _post_extract(img, "mixed.jpg")
         acc = _word_accuracy(data["text"], truth)
         report["cases"].append({
             "case": "mixed_bengali_english", "engine": data["engine"], "latency_s": round(dt, 2),
@@ -220,9 +211,7 @@ class TestAccuracyIteration6:
         truth = "\n".join(MIXED_LINES)
         clean = _to_jpeg(_render_mixed(MIXED_LINES))
         degraded = _degrade(clean, angle=2.5)
-        r, dt = _post_extract(degraded, "degraded.jpg")
-        assert r.status_code == 200, r.text
-        data = r.json()
+        data, dt = _post_extract(degraded, "degraded.jpg")
         acc = _word_accuracy(data["text"], truth)
         report["cases"].append({
             "case": "degraded_page", "engine": data["engine"], "latency_s": round(dt, 2),
@@ -234,9 +223,7 @@ class TestAccuracyIteration6:
     def test_short_two_lines(self, report):
         truth = "\n".join(SHORT_LINES)
         img = _to_jpeg(_render_mixed(SHORT_LINES, size=(1200, 400)))
-        r, dt = _post_extract(img, "short.jpg")
-        assert r.status_code == 200, r.text
-        data = r.json()
+        data, dt = _post_extract(img, "short.jpg")
         acc = _word_accuracy(data["text"], truth)
         report["cases"].append({
             "case": "short_two_lines", "engine": data["engine"], "latency_s": round(dt, 2),
@@ -248,9 +235,7 @@ class TestAccuracyIteration6:
     def test_long_page_no_drops_no_dupes(self, report):
         truth = "\n".join(LONG_LINES)
         img = _to_jpeg(_render_mixed(LONG_LINES, size=(1600, 1600)))
-        r, dt = _post_extract(img, "long.jpg")
-        assert r.status_code == 200, r.text
-        data = r.json()
+        data, dt = _post_extract(img, "long.jpg")
         acc = _word_accuracy(data["text"], truth)
         # Count distinct "Line N" tokens from truth preserved in prediction
         tokens = ["one", "two", "third", "fourth", "fifth", "six", "seventh",

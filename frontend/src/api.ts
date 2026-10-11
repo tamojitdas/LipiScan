@@ -33,6 +33,47 @@ export async function postForm<T>(path: string, form: FormData): Promise<T> {
   return res.json();
 }
 
+export interface ExtractResult {
+  id: string;
+  text: string;
+  engine?: "gemini-pro" | "gemini-flash" | "gemma" | "tesseract";
+}
+
+interface ExtractJob extends Partial<ExtractResult> {
+  job_id: string;
+  status: "processing" | "done" | "error";
+  detail?: string;
+}
+
+/**
+ * Extraction takes longer than the request timeout allowed by the ingress, so the
+ * backend runs it as a job and we poll until it finishes.
+ */
+export async function extractText(
+  uri: string,
+  engine: string,
+  maxWaitMs = 5 * 60 * 1000,
+): Promise<ExtractResult> {
+  const form = await buildImageForm(uri);
+  form.append("engine", engine);
+  const started = await postForm<ExtractJob>("/extract", form);
+
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const res = await fetch(`${API_BASE}/extract/${started.job_id}`);
+    if (!res.ok) throw new Error("Could not check extraction status");
+    const job = (await res.json()) as ExtractJob;
+    if (job.status === "done") {
+      return { id: job.id!, text: job.text ?? "", engine: job.engine };
+    }
+    if (job.status === "error") {
+      throw new Error(job.detail ?? "Extraction failed");
+    }
+  }
+  throw new Error("Extraction timed out. Please try again with a clearer photo.");
+}
+
 export interface QualityIssue {
   code: string;
   label: string;

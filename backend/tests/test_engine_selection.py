@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 import requests
 from PIL import Image, ImageDraw, ImageFont
+from extract_client import extract, start_extract
 
 BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://docx-capture.preview.emergentagent.com").rstrip("/")
 API = f"{BASE_URL}/api"
@@ -72,26 +73,13 @@ class TestEngineSelection:
     """engine form field + fallback chain tolerance."""
 
     def test_engine_omitted_defaults_to_gemma_first(self, session):
-        r = session.post(
-            f"{API}/extract",
-            files={"file": ("en.jpg", _en_image(), "image/jpeg")},
-            timeout=120,
-        )
-        assert r.status_code == 200, r.text
-        data = r.json()
+        data = extract(("en.jpg", _en_image(), "image/jpeg"))
         assert data["engine"] in {"gemini-pro", "gemini-flash", "gemma"}, data
         # If HF is up, 'auto' should prefer gemma. Accept gemini as graceful fallback.
         assert "id" in data and isinstance(data["text"], str)
 
     def test_engine_gemma_explicit_english(self, session):
-        r = session.post(
-            f"{API}/extract",
-            data={"engine": "gemma"},
-            files={"file": ("en.jpg", _en_image(), "image/jpeg")},
-            timeout=120,
-        )
-        assert r.status_code == 200, r.text
-        data = r.json()
+        data = extract(("en.jpg", _en_image(), "image/jpeg"), engine="gemma")
         # Must be in {gemma, gemini} (gemini only if Gemma failed and fell back)
         assert data["engine"] in {"gemini-pro", "gemini-flash", "gemma", "tesseract"}, data
         # Prefer gemma when HF_TOKEN is set in .env
@@ -101,45 +89,22 @@ class TestEngineSelection:
         assert hits >= 3, f"too few keywords: {data['text']!r}"
 
     def test_engine_gemma_explicit_bengali(self, session):
-        r = session.post(
-            f"{API}/extract",
-            data={"engine": "gemma"},
-            files={"file": ("bn.jpg", _bn_image(), "image/jpeg")},
-            timeout=120,
-        )
-        assert r.status_code == 200, r.text
-        data = r.json()
+        data = extract(("bn.jpg", _bn_image(), "image/jpeg"), engine="gemma")
         assert data["engine"] == "gemma", f"expected gemma, got {data}"
         txt = data["text"]
         assert any("\u0980" <= c <= "\u09FF" for c in txt), f"Bengali missing: {txt!r}"
 
     def test_engine_gemini_explicit(self, session):
-        r = session.post(
-            f"{API}/extract",
-            data={"engine": "gemini-flash"},
-            files={"file": ("en.jpg", _en_image(), "image/jpeg")},
-            timeout=120,
-        )
-        assert r.status_code == 200, r.text
-        data = r.json()
+        data = extract(("en.jpg", _en_image(), "image/jpeg"), engine="gemini-flash")
         assert data["engine"] == "gemini-flash", f"expected gemini, got {data}"
         low = data["text"].lower()
         hits = sum(1 for w in ["quick", "brown", "fox", "lazy", "dog"] if w in low)
         assert hits >= 3, f"too few keywords: {data['text']!r}"
 
     def test_extract_empty_file_returns_400(self, session):
-        r = session.post(
-            f"{API}/extract",
-            data={"engine": "gemma"},
-            files={"file": ("empty.jpg", b"", "image/jpeg")},
-        )
+        r = start_extract(("empty.jpg", b"", "image/jpeg"), engine="gemma")
         assert r.status_code == 400
 
     def test_extract_invalid_image_returns_400(self, session):
-        r = session.post(
-            f"{API}/extract",
-            data={"engine": "gemma"},
-            files={"file": ("bad.jpg", b"not an image at all, just text bytes", "image/jpeg")},
-            timeout=60,
-        )
+        r = start_extract(("bad.jpg", b"not an image at all, just text bytes", "image/jpeg"), engine="gemma")
         assert r.status_code == 400

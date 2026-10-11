@@ -8,16 +8,10 @@ import { ActivityIndicator, Platform, Pressable, Text, TextInput, View } from "r
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { buildImageForm, postForm } from "@/src/api";
+import { type ExtractResult, extractText } from "@/src/api";
 import { API_BASE, session } from "@/src/session";
 import { ENGINE_LABELS, getOcrEngine } from "@/src/settings";
 import { makeStyles, useTheme } from "@/src/theme";
-
-type ExtractResult = {
-  id: string;
-  text: string;
-  engine?: "gemini-pro" | "gemini-flash" | "gemma" | "tesseract";
-};
 
 export default function Review() {
   const insets = useSafeAreaInsets();
@@ -69,11 +63,7 @@ export default function Review() {
     enabled: !!uri,
     retry: false,
     staleTime: Infinity,
-    queryFn: async () => {
-      const form = await buildImageForm(uri!);
-      form.append("engine", await getOcrEngine());
-      return postForm<ExtractResult>("/extract", form);
-    },
+    queryFn: async () => extractText(uri!, await getOcrEngine()),
   });
 
   useEffect(() => {

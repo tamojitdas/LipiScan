@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +16,7 @@ import cv2
 import httpx
 import numpy as np
 import pytesseract
+from bson import ObjectId
 from docx import Document as DocxDocument
 from dotenv import load_dotenv
 from emergentintegrations.llm.chat import ImageContent, LlmChat, UserMessage
@@ -48,7 +50,16 @@ def ensure_tesseract():
     try:
         subprocess.run(["apt-get", "update", "-qq"], check=False, capture_output=True, timeout=300)
         subprocess.run(
-            ["apt-get", "install", "-y", "-qq", "tesseract-ocr", "tesseract-ocr-ben", "tesseract-ocr-eng"],
+            [
+                "apt-get",
+                "install",
+                "-y",
+                "-qq",
+                "tesseract-ocr",
+                "tesseract-ocr-ben",
+                "tesseract-ocr-eng",
+                "fonts-lohit-beng-bengali",
+            ],
             check=True,
             capture_output=True,
             timeout=300,
@@ -174,6 +185,45 @@ def run_ocr_sync(img_bytes: bytes) -> str:
     return _clean_text(raw)
 
 
+def _crop_document(gray: np.ndarray) -> np.ndarray:
+    """Trim the desk/background around the sheet of paper.
+
+    Deliberately conservative: a plain bounding-box crop of the bright paper
+    region (no perspective warp), because phone photos often cut the page edge
+    and an aggressive warp would slice off text.
+    """
+    h, w = gray.shape[:2]
+    blurred = cv2.GaussianBlur(gray, (9, 9), 0)
+    paper = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+    paper = cv2.morphologyEx(paper, cv2.MORPH_CLOSE, np.ones((25, 25), np.uint8))
+    contours, _ = cv2.findContours(paper, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return gray
+    largest = max(contours, key=cv2.contourArea)
+    if cv2.contourArea(largest) < 0.3 * h * w:
+        return gray
+    x, y, cw, ch = cv2.boundingRect(largest)
+    pad = max(4, min(h, w) // 100)
+    x0, y0 = max(0, x - pad), max(0, y - pad)
+    x1, y1 = min(w, x + cw + pad), min(h, y + ch + pad)
+    if (x1 - x0) < 0.5 * w or (y1 - y0) < 0.5 * h:
+        return gray
+    return gray[y0:y1, x0:x1]
+
+
+def _scale_to(img: np.ndarray, target_max_dim: int, max_upscale: float = 2.5) -> np.ndarray:
+    """Scale so the longest side is ~target (up or down, upscaling is capped)."""
+    h, w = img.shape[:2]
+    current = max(h, w)
+    factor = target_max_dim / current
+    if factor > 1:
+        factor = min(factor, max_upscale)
+    if abs(factor - 1) < 0.02:
+        return img
+    interp = cv2.INTER_CUBIC if factor > 1 else cv2.INTER_AREA
+    return cv2.resize(img, (int(w * factor), int(h * factor)), interpolation=interp)
+
+
 def _deskew(gray: np.ndarray) -> np.ndarray:
     """Straighten a slightly rotated page — handwriting OCR is sensitive to skew."""
     bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
@@ -193,10 +243,11 @@ def _deskew(gray: np.ndarray) -> np.ndarray:
 
 
 def _enhance(gray: np.ndarray) -> np.ndarray:
-    """Boost local contrast so faint pen strokes survive JPEG encoding."""
-    gray = cv2.fastNlMeansDenoising(gray, None, 7, 7, 21)
+    """Even out lighting and boost local contrast so faint pen strokes survive."""
+    background = cv2.medianBlur(gray, 31)
+    flat = cv2.divide(gray, background, scale=255)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    return clahe.apply(gray)
+    return clahe.apply(flat)
 
 
 def _to_b64_jpeg(img: np.ndarray, quality: int = 95) -> str:
@@ -209,14 +260,23 @@ def _to_b64_jpeg(img: np.ndarray, quality: int = 95) -> str:
 def _line_bands(gray: np.ndarray, max_lines_per_band: int = 3) -> List[tuple]:
     """Find handwriting lines via a horizontal projection profile and group them
     into small bands. Transcribing a few lines at a time at high resolution is far
-    more accurate than one shrunken full-page pass."""
+    more accurate than one shrunken full-page pass.
+
+    Expects an enhanced (background-flattened) grayscale page.
+    """
     h, w = gray.shape[:2]
-    bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
-    kernel_w = max(15, w // 60)
-    bw = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, np.ones((3, kernel_w), np.uint8))
-    proj = (bw > 0).sum(axis=1)
-    row_threshold = max(4.0, 0.004 * w)
-    min_line_h = max(6, h // 180)
+    ink = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+    ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    # ignore the outer margins, where page edges and shadows add noise
+    core = ink[:, int(0.04 * w) : int(0.96 * w)]
+    kernel_w = max(9, core.shape[1] // 80)
+    core = cv2.morphologyEx(core, cv2.MORPH_CLOSE, np.ones((3, kernel_w), np.uint8))
+
+    proj = (core > 0).sum(axis=1).astype(float)
+    smooth = max(3, h // 400)
+    proj = np.convolve(proj, np.ones(smooth) / smooth, mode="same")
+    row_threshold = max(0.15 * proj.max(), 0.01 * w)
+    min_line_h = max(6, h // 250)
 
     lines: List[tuple] = []
     start = None
@@ -234,27 +294,28 @@ def _line_bands(gray: np.ndarray, max_lines_per_band: int = 3) -> List[tuple]:
         return []
 
     bands: List[tuple] = []
-    pad = max(8, h // 120)
+    pad = max(10, h // 150)
     for i in range(0, len(lines), max_lines_per_band):
         group = lines[i : i + max_lines_per_band]
         top = max(0, group[0][0] - pad)
         bottom = min(h, group[-1][1] + pad)
         bands.append((top, bottom))
-    return bands[:12]  # safety cap on model calls
+    return bands[:16]  # safety cap on model calls
 
 
-def prepare_vision_inputs(img_bytes: bytes, max_dim: int = 2400) -> dict:
-    """Deskew + contrast-enhance the page, then return the full page plus
-    high-resolution line bands, all base64 JPEG."""
+def prepare_vision_inputs(img_bytes: bytes, max_dim: int = 2400, lines_per_band: int = 3) -> dict:
+    """Crop the page out of the photo, deskew, flatten lighting, then return the
+    full page plus high-resolution line bands, all base64 JPEG."""
     gray = _decode_gray(img_bytes)
-    gray = _resize_max(gray, max_dim)
+    gray = _crop_document(gray)
+    gray = _scale_to(gray, max_dim)
     gray = _enhance(_deskew(gray))
 
     bands = []
-    for top, bottom in _line_bands(gray):
+    for top, bottom in _line_bands(gray, lines_per_band):
         crop = gray[top:bottom, :]
-        if crop.shape[1] < 1600:  # upscale narrow crops for finer strokes
-            scale = 1600 / crop.shape[1]
+        if crop.shape[1] < 2000:  # upscale narrow crops for finer strokes
+            scale = 2000 / crop.shape[1]
             crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
         bands.append(_to_b64_jpeg(crop))
 
@@ -263,7 +324,11 @@ def prepare_vision_inputs(img_bytes: bytes, max_dim: int = 2400) -> dict:
 
 LANG_HINT = (
     "The notes are mostly Bengali (Bangla) handwriting and may mix in English words, numbers and "
-    "abbreviations. Keep Bengali in Bengali script and English in Latin script."
+    "abbreviations. Keep Bengali in Bengali script and English in Latin script. "
+    "Pay very close attention to Bengali vowel signs and their length (ি vs ী, ু vs ূ, ে vs ৈ, "
+    "ো vs ৌ), to candrabindu (ঁ) and anusvara (ং), to hasanta conjuncts, and to র-ফলা / য-ফলা / "
+    "রেফ, which are easy to confuse in cursive handwriting. Use standard Bengali spellings for "
+    "common words and names (for example দূর্গা, সরস্বতী, লক্ষ্মী, গণেশ, কৈলাস, মর্ত্যে)."
 )
 
 VISION_OCR_SYSTEM = (
@@ -303,9 +368,18 @@ AI_ENGINES: dict = {
 }
 DEFAULT_ENGINE = "gemini-pro"
 
+# Which model drafts the line bands and which one proofreads the page.
+# Flash drafts the strips (fast, accurate enough per line) and Pro proofreads the
+# whole page — measured as both faster AND more accurate than Pro doing both.
+ENGINE_PLAN: dict = {
+    "gemini-pro": {"draft": "gemini-flash", "refine": "gemini-pro"},
+    "gemini-flash": {"draft": "gemini-flash", "refine": "gemini-flash"},
+    "gemma": {"draft": "gemma", "refine": "gemma"},
+}
+
 
 def _finalize_ocr_text(text: str) -> str:
-    text = text.strip()
+    text = unicodedata.normalize("NFC", text.strip())
     if text.upper().startswith("NO_TEXT_FOUND"):
         return ""
     text = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", text.strip())
@@ -370,19 +444,23 @@ async def vision_call(engine: str, image_b64: str, prompt: str, system: str) -> 
 
 
 async def run_ai_ocr(engine: str, img_bytes: bytes) -> str:
-    """High-accuracy pipeline: deskew/enhance → line-band passes → full-page proofread.
+    """High-accuracy pipeline: crop/deskew/flatten → line-band drafts → page proofread.
 
     Raises on model failure so the caller can fall back to another engine.
     """
+    plan = ENGINE_PLAN[engine]
     prepared = await asyncio.to_thread(prepare_vision_inputs, img_bytes)
 
     if prepared["bands"]:
         parts = await asyncio.gather(
-            *[vision_call(engine, band, BAND_PROMPT, VISION_OCR_SYSTEM) for band in prepared["bands"]]
+            *[
+                vision_call(plan["draft"], band, BAND_PROMPT, VISION_OCR_SYSTEM)
+                for band in prepared["bands"]
+            ]
         )
         draft = "\n".join(p.strip() for p in parts if p.strip() and "NO_TEXT_FOUND" not in p.upper())
     else:
-        draft = await vision_call(engine, prepared["page"], PAGE_PROMPT, VISION_OCR_SYSTEM)
+        draft = await vision_call(plan["draft"], prepared["page"], PAGE_PROMPT, VISION_OCR_SYSTEM)
 
     draft = _finalize_ocr_text(draft)
     if not draft:
@@ -390,7 +468,7 @@ async def run_ai_ocr(engine: str, img_bytes: bytes) -> str:
 
     try:
         refined = await vision_call(
-            engine,
+            plan["refine"],
             prepared["page"],
             f"Draft transcription to verify and correct:\n\n{draft}",
             REFINE_SYSTEM,
@@ -424,12 +502,9 @@ async def quality_check(file: UploadFile = File(...)):
     return result
 
 
-@api_router.post("/extract")
-async def extract_text(file: UploadFile = File(...), engine: str = Form(DEFAULT_ENGINE)):
-    data = await file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="Empty file")
-
+async def _run_extract_pipeline(data: bytes, engine: str) -> dict:
+    """Run the OCR engine chain and persist a history item. Raises ValueError for
+    an undecodable image."""
     preferred = engine if engine in AI_ENGINES else DEFAULT_ENGINE
     order = [preferred] + [e for e in AI_ENGINES if e != preferred]
 
@@ -442,18 +517,15 @@ async def extract_text(file: UploadFile = File(...), engine: str = Form(DEFAULT_
             used = name
             break
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid image")
+            raise
         except Exception as exc:
             errors.append(f"{name}: {exc}")
             logging.warning("%s OCR failed: %s", name, exc)
 
     if not used:
         logging.error("all vision engines failed: %s", " | ".join(errors))
-        try:
-            text = await asyncio.to_thread(run_ocr_sync, data)
-            used = "tesseract"
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid image")
+        text = await asyncio.to_thread(run_ocr_sync, data)
+        used = "tesseract"
 
     item = HistoryItem(
         text=text,
@@ -465,6 +537,59 @@ async def extract_text(file: UploadFile = File(...), engine: str = Form(DEFAULT_
     return {"id": str(res.inserted_id), "text": text, "engine": used}
 
 
+async def _extract_job_worker(job_id: str, data: bytes, engine: str) -> None:
+    try:
+        result = await _run_extract_pipeline(data, engine)
+        update = {"status": "done", **result}
+    except ValueError:
+        update = {"status": "error", "detail": "Invalid image"}
+    except Exception as exc:
+        logging.exception("extract job %s failed", job_id)
+        update = {"status": "error", "detail": str(exc)[:300]}
+    update["finished_at"] = datetime.now(timezone.utc)
+    await db.extract_jobs.update_one({"_id": ObjectId(job_id)}, {"$set": update})
+
+
+@api_router.post("/extract", status_code=202)
+async def extract_text(file: UploadFile = File(...), engine: str = Form(DEFAULT_ENGINE)):
+    """Start an extraction job. The full pipeline can take over a minute, which is
+    longer than the ingress request budget, so the client polls GET /extract/{id}."""
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file")
+    try:
+        await asyncio.to_thread(_decode_gray, data)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid image")
+
+    requested = engine if engine in AI_ENGINES else DEFAULT_ENGINE
+    res = await db.extract_jobs.insert_one(
+        {
+            "status": "processing",
+            "engine": requested,
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    job_id = str(res.inserted_id)
+    asyncio.create_task(_extract_job_worker(job_id, data, requested))
+    return {"job_id": job_id, "status": "processing"}
+
+
+@api_router.get("/extract/{job_id}")
+async def extract_status(job_id: str):
+    if not ObjectId.is_valid(job_id):
+        raise HTTPException(status_code=400, detail="Invalid job id")
+    job = await db.extract_jobs.find_one({"_id": ObjectId(job_id)})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    payload = {"job_id": job_id, "status": job["status"], "engine": job.get("engine")}
+    if job["status"] == "done":
+        payload.update({"id": job.get("id"), "text": job.get("text", "")})
+    elif job["status"] == "error":
+        payload["detail"] = job.get("detail", "Extraction failed")
+    return payload
+
+
 @api_router.get("/history")
 async def get_history():
     docs = await db.history.find({"deleted_at": None}).sort("created_at", -1).to_list(100)
@@ -473,8 +598,6 @@ async def get_history():
 
 @api_router.delete("/history/{item_id}")
 async def delete_history(item_id: str):
-    from bson import ObjectId
-
     try:
         oid = ObjectId(item_id)
     except Exception:

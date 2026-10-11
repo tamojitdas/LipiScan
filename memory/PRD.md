@@ -16,12 +16,23 @@ User requested a native Android (Kotlin/Jetpack Compose) app for extracting hand
 
 ## API
 - POST /api/quality-check (image) → {ok, blur_score, brightness, has_text, issues[]}
-- POST /api/extract (image) → {id, text, engine} + history record (Gemini 3 Flash vision primary, Tesseract fallback)
+- POST /api/extract (image, engine) → 202 {job_id, status} (async; ingress has a 60s budget)
+- GET /api/extract/{job_id} → {status: processing|done|error, text, engine, id}
 - GET /api/history, DELETE /api/history/{id} (soft delete)
 - POST /api/append-docx (docx, text, position=end|after_heading, heading) → {download_id, filename}
 - GET /api/download/{download_id}
 
 ## Implemented (June 2026)
+### Iteration 7 — Tuned against the user's real photo + async extract jobs
+- User supplied a real phone photo of dense Bengali cursive (~30 lines) + ground truth → committed as `tests/fixtures/real_sample.jpg` / `real_sample_truth.txt` with a regression test (`tests/test_real_sample_accuracy.py`, floors: 85% word / 90% char)
+- Iteration 6's banding silently failed on this photo (0 bands → one shrunken full-page pass, 88.6% word). Fixes: conservative bright-paper crop (`_crop_document`), background-division + CLAHE lighting flattening, upscaling via `_scale_to` (up to 2.5x), new ink-mask projection with a relative (15% of max) row threshold → 10 bands on the real page
+- Output is NFC-normalised; prompts gained Bengali orthography guidance (ি/ী, ু/ূ, ঁ, ং, র-ফলা/য-ফলা, standard name spellings)
+- `ENGINE_PLAN` hybrid: "Best accuracy" (gemini-pro) = Flash drafts the line bands + Gemini 3.1 Pro proofreads the page — measured faster AND more accurate than Pro for both (93.0%/94.8% in ~62s vs 91.7%/94.3% in ~90s). "Fast" = Flash for both; Gemma uses Gemma for both
+- ASYNC JOBS (required): the ingress kills requests at 60s, so `POST /api/extract` now returns `202 {job_id, status}` and the client polls `GET /api/extract/{job_id}` (jobs stored in `extract_jobs`). Frontend polls via `extractText()` in `src/api.ts`; tests use `tests/extract_client.py`
+- Settings labels are now outcome-based: "Best accuracy" / "Fast" / "Gemma 4 (open model)"
+- `ensure_tesseract()` also installs fonts-lohit-beng-bengali (the container keeps losing apt packages)
+- Tested: 38/38 pytest; real-page extract verified end-to-end through the public ingress (~65s, no 502)
+
 ### Iteration 6 — Accuracy overhaul (default = Gemini 3.1 Pro)
 - Bug: user reported transcriptions still varying a lot from the page. Fine-tuning rejected (needs labelled corpus + GPUs); instead rebuilt the pipeline
 - Engine registry `AI_ENGINES`: `gemini-pro` → gemini-3.1-pro-preview (DEFAULT), `gemini-flash` → gemini-3-flash-preview, `gemma` → HF google/gemma-4-31B-it; fallback = preferred → others → Tesseract

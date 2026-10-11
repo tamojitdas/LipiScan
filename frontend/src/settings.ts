@@ -9,20 +9,21 @@ export const DEFAULT_OCR_ENGINE: OcrEngine = "gemini-pro";
 export const OCR_ENGINES: { value: OcrEngine; label: string; description: string; icon: string }[] = [
   {
     value: "gemini-pro",
-    label: "Gemini 3.1 Pro",
-    description: "Most accurate for Bengali handwriting. Recommended — a little slower.",
+    label: "Best accuracy",
+    description:
+      "Gemini 3 Flash reads each line, then Gemini 3.1 Pro proofreads the whole page. Takes about a minute on a full page.",
     icon: "star-four-points",
   },
   {
     value: "gemini-flash",
-    label: "Gemini 3 Flash",
-    description: "Faster and cheaper, slightly less accurate on messy handwriting.",
+    label: "Fast",
+    description: "Gemini 3 Flash only. Around 20 seconds a page, slightly less accurate.",
     icon: "flash",
   },
   {
     value: "gemma",
-    label: "Gemma 4 (31B)",
-    description: "Google's open model via Hugging Face. Weakest on Bengali handwriting.",
+    label: "Gemma 4 (open model)",
+    description: "Gemma 4 31B via Hugging Face. Weakest on Bengali handwriting.",
     icon: "leaf",
   },
 ];
@@ -38,7 +39,7 @@ export async function setOcrEngine(engine: OcrEngine): Promise<void> {
 }
 
 export const ENGINE_LABELS: Record<string, string> = {
-  "gemini-pro": "Gemini 3.1 Pro",
+  "gemini-pro": "Gemini 3 Flash + 3.1 Pro proofread",
   "gemini-flash": "Gemini 3 Flash",
   gemma: "Gemma 4 (31B)",
   tesseract: "Offline OCR (Tesseract)",

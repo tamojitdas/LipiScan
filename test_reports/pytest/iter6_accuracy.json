@@ -3,7 +3,7 @@
     {
       "case": "bengali_multiline",
       "engine": "gemini-pro",
-      "latency_s": 10.47,
+      "latency_s": 18.04,
       "accuracy": 1.0,
       "truth": "আমার সোনার বাংলা\nআমি তোমায় ভালোবাসি\nচিরদিন তোমার আকাশ\nতোমার বাতাস\nআমার প্রাণে বাজায়\nমধুর বাঁশি",
       "predicted": "আমার সোনার বাংলা\nআমি তোমায় ভালোবাসি\nচিরদিন তোমার আকাশ\nতোমার বাতাস\nআমার প্রাণে বাজায়\nমধুর বাঁশি"
@@ -11,15 +11,15 @@
     {
       "case": "mixed_bengali_english",
       "engine": "gemini-pro",
-      "latency_s": 9.23,
-      "accuracy": 0.952,
+      "latency_s": 8.02,
+      "accuracy": 1.0,
       "truth": "আজ Monday, class শুরু\nMath আর Science পড়তে হবে\nআমার roll number 42\nTeacher বললেন homework করো\nExam আসছে next week",
-      "predicted": "আজ Monday, class শুরু\nMath আর Science পড়তে হবে\nআমার roll number 42\nTeacher বললেন homework করো\nExam আসছে next week"
+      "predicted": "আজ Monday, class শুরু\nMath আর Science পড়তে হবে\nআমার roll number 42\nTeacher বললেন homework করো\nExam আসছে next week"
     },
     {
       "case": "degraded_page",
       "engine": "gemini-pro",
-      "latency_s": 13.08,
+      "latency_s": 8.02,
       "accuracy": 1.0,
       "truth": "আজ Monday, class শুরু\nMath আর Science পড়তে হবে\nআমার roll number 42\nTeacher বললেন homework করো\nExam আসছে next week",
       "predicted": "আজ Monday, class শুরু\nMath আর Science পড়তে হবে\nআমার roll number 42\nTeacher বললেন homework করো\nExam আসছে next week"
@@ -27,7 +27,7 @@
     {
       "case": "short_two_lines",
       "engine": "gemini-pro",
-      "latency_s": 10.33,
+      "latency_s": 4.01,
       "accuracy": 1.0,
       "truth": "Hello world\nLipiScan test",
       "predicted": "Hello world\nLipiScan test"
@@ -35,7 +35,7 @@
     {
       "case": "long_page_12_lines",
       "engine": "gemini-pro",
-      "latency_s": 7.53,
+      "latency_s": 8.02,
       "accuracy": 1.0,
       "found_tokens": [
         "one",

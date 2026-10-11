@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 import requests
 from PIL import Image, ImageDraw, ImageFont
+from extract_client import extract
 
 BASE_URL = os.environ["EXPO_PUBLIC_BACKEND_URL"].rstrip("/") if os.environ.get(
     "EXPO_PUBLIC_BACKEND_URL"
@@ -104,13 +105,7 @@ class TestExtractAIEngine:
 
     def test_english_handwriting_returns_ai_engine_with_readable_text(self, session):
         img = _handwriting_only_image()
-        r = session.post(
-            f"{API}/extract",
-            files={"file": ("hw_en.jpg", img, "image/jpeg")},
-            timeout=90,
-        )
-        assert r.status_code == 200, r.text
-        data = r.json()
+        data = extract(("hw_en.jpg", img, "image/jpeg"))
         assert set(["id", "text", "engine"]).issubset(data.keys()), data
         assert data["engine"] in {"gemini-pro", "gemini-flash", "gemma"}, f"Expected an AI engine, got {data['engine']}: {data['text']!r}"
         text_lower = data["text"].lower()
@@ -126,13 +121,7 @@ class TestExtractAIEngine:
 
     def test_bengali_stays_bengali_and_engine_ai(self, session):
         img = _bengali_image()
-        r = session.post(
-            f"{API}/extract",
-            files={"file": ("hw_bn.jpg", img, "image/jpeg")},
-            timeout=90,
-        )
-        assert r.status_code == 200, r.text
-        data = r.json()
+        data = extract(("hw_bn.jpg", img, "image/jpeg"))
         assert data["engine"] in {"gemini-pro", "gemini-flash", "gemma"}, f"Expected an AI engine, got {data}"
         text = data["text"]
         # Must contain Bengali characters (U+0980–U+09FF)
@@ -150,13 +139,7 @@ class TestExtractAIEngine:
         pre = session.get(f"{API}/history").json()
         pre_ids = {i["id"] for i in pre}
         img = _handwriting_only_image()
-        r = session.post(
-            f"{API}/extract",
-            files={"file": ("hw_hist.jpg", img, "image/jpeg")},
-            timeout=90,
-        )
-        assert r.status_code == 200
-        new_id = r.json()["id"]
+        new_id = extract(("hw_hist.jpg", img, "image/jpeg"))["id"]
         post = session.get(f"{API}/history").json()
         post_ids = {i["id"] for i in post}
         assert new_id in post_ids, "new extract not visible in history"
